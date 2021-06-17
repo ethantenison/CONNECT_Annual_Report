@@ -1,0 +1,100 @@
+---
+title: "CONNECT Annual Report"
+author: "Ethan Tenison"
+date: "`r format(Sys.Date(), '%B %d, %Y') `"
+output:
+  bookdown::html_document2:
+    toc: yes
+    toc_float: yes
+    toc_depth: 3
+    collapsed: no
+    number_sections: yes
+    fig_caption: yes
+always_allow_html: yes
+editor_options:
+  chunk_output_type: console
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+library(shiny)
+
+library(bookdown)
+library(officer)
+library(officedown)
+
+library(tm)
+library(wordcloud)
+library(wordcloud2)
+library(NLP)
+
+library(tidyverse)
+
+# render tables
+library(kableExtra)
+library(flextable)
+
+library(scales)
+library(extrafont)
+library(ggpubr)
+library(hablar) # Easily change column type
+library(extrafont)
+library(lubridate)
+library(plotly)
+library(ggthemes)
+library(DT)
+library(htmlwidgets)
+library(data.table)
+library(htmlwidgets)
+library(readxl)
+
+knitr::opts_chunk$set(echo = FALSE, dpi = 300)
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+```
+
+```{r constants, include=FALSE}
+
+color_hd <- "#00a9e0"  
+color_font <- "#283e36"
+color_bg <- "#eff2f1"
+color_red <- "#e00034"
+color_blue <-  "#0f4dbc"
+```
+
+
+
+```{r my_functions, include=F}
+
+
+
+# glue is better
+fn_text <- function(txt, color = color_font, size_px = 15)
+  glue::glue('
+             <span style="
+              color:{color}; 
+              font-size: {size_px}px">
+              {txt}
+             </span>')
+
+
+```
+
+<br>
+
+# Introduction
+
+The purpose of this document is to provide updates on the CONNECT Program during year 3 of it's development
+
+```{r data_cleaning, include=T}
+
+gm <- read_excel("data/raw/Good Measure Program Attendees as of 6.14.2021.xlsx", 
+    sheet = "Good Measure Program Attendees ")
+
+DT::datatable(gm)
+
+```
+
+
+# CONNECT Program Network 
+
+Since it's inception in 2018, CONNECT has partnered with 80 unique organizations. 
