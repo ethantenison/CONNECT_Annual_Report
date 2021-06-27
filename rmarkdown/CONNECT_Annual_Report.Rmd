@@ -14,7 +14,10 @@ always_allow_html: yes
 editor_options:
   chunk_output_type: console
 runtime: shiny
+resource_files:
+- references/images/RGB_formal_RGK.png
 ---
+
 
 ```{r setup, include=FALSE}
 library(shiny)
@@ -51,6 +54,17 @@ library(readxl)
 knitr::opts_chunk$set(echo = FALSE, dpi = 300)
 knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
 ```
+
+```{r htmlTemplate, echo=FALSE}
+# Create the external file
+htmltools::img(src = knitr::image_uri("C:/Users/tenis/Desktop/Data_Projects/CONNECT_Annual_Report/references/images/RGB_formal_RGK_resized.png"), 
+               alt = 'logo', 
+               style = 'position:absolute; top:50px; right:1%; padding:10px;z-index:200;')
+
+
+```
+
+
 
 ```{r constants, include=FALSE}
 

@@ -1,0 +1,3629 @@
+---
+author: "Claudio Rebelo"
+date: "`r format(Sys.Date(), '%B %d, %Y') `"
+output:
+  bookdown::html_document2:
+    toc: yes
+    toc_float: yes
+    toc_depth: 3
+    collapsed: no
+    number_sections: yes
+    css: templates/template.css
+    fig_caption: yes
+always_allow_html: yes
+editor_options:
+  chunk_output_type: console
+runtime: shiny
+resource_files:
+- templates/logo.png
+
+---
+
+```{r setup, include=FALSE}
+library(shiny)
+
+library(bookdown)
+library(officer)
+library(officedown)
+
+library(tm)
+library(wordcloud)
+library(wordcloud2)
+library(NLP)
+
+library(tidyverse)
+
+# render tables
+library(kableExtra)
+library(flextable)
+
+library(scales)
+library(extrafont)
+library(ggpubr)
+library(hablar)
+library(extrafont)
+library(lubridate)
+library(plotly)
+library(ggthemes)
+library(DT)
+library(htmlwidgets)
+library(data.table)
+library(htmlwidgets)
+
+
+source("attributes/srp_dot_xvsy.R")
+source("attributes/srp_cleveland.R")
+source("attributes/srp_banding.R")
+source("attributes/srd_functions.R")
+source("attributes/sr colors.R")
+
+
+
+knitr::opts_chunk$set(echo = FALSE, dpi = 300)
+```
+
+
+```{r constants, include=FALSE}
+
+folder_w_files <- "Database\\"
+# defines the number of top list to include
+top_number <- 5
+color_hd <- "#00a9e0"  
+# color_font <- "#282828"
+color_font <- "#283e36"
+# color_bg <- "#edf1f5"
+color_bg <- "#eff2f1"
+
+df_bands <- tibble(
+  Band = c("Nothing\nReported", 
+           "0 - 50k",
+           "50k - 250k",
+           "250k - 500k", 
+           "500k - 2m", 
+           "above 2m"),
+  
+  LB = c(-Inf, 0, 50e3, 250e3, 500e3, 2e6), 
+  UB = c(0, 50e3, 250e3, 500e3, 2e6, Inf)
+)
+
+
+color_hd <- "#00a9e0"  
+# color_font <- "#282828"
+color_font <- "#283e36"
+color_bg <- "#eff2f1"
+color_red <- "#e00034"
+color_blue <-  "#0f4dbc"
+```
+
+
+```{r my_functions, include=F}
+
+
+
+
+# style stuff
+
+# fn_font_color <-  function(text, color) {
+#  sprintf("<span style='color: %s;'>%s</span>", color, text)
+# }
+
+# glue is better
+fn_text <- function(txt, color = color_font, size_px = 15)
+  glue::glue('
+             <span style="
+              color:{color}; 
+              font-size: {size_px}px">
+              {txt}
+             </span>')
+
+
+# add factor by largest values
+fn_fct_by_value <- function(df, fct, by_value){
+  fct <- enquo(fct)
+  by_value <- enquo(by_value)
+  
+df_levels_fct <- df %>% 
+                group_by(!!fct) %>% 
+                summarise(value := sum(!!by_value, na.rm = T)) %>% 
+                arrange(desc(value)) 
+levels_fct <- pull(df_levels_fct, !!fct)
+
+return(df %>% mutate(!!fct:= factor(!!fct, levels = levels_fct)))
+    
+}
+
+# functions add a suffix to a list of columns (if a columns doesn't exists it will be ignored)
+fn_add_suffix <- function(df, col_names_any_of, suffix) {
+  col_names <- colnames(df)[colnames(df) %in% col_names_any_of]
+  cat("renamed the following columns:\n", col_names, "\nto:\n", str_c(col_names, suffix))
+  rename_with(.data = df, 
+              .fn = ~str_c( col_names, suffix  ), 
+              .cols = all_of(col_names)
+  ) 
+}
+
+
+
+```
+
+<script>
+$(document).ready(function(){
+    $('[data-toggle="popover"]').popover(); 
+});
+</script>
+
+
+```{r create_master_table, include=FALSE}
+
+# retrieve RRs database and merge policy data with claims data for currnent and prior financial period.
+
+
+
+# path_output <- paste0(path_dir, "Manipulated Data\\")
+# type of amounts to be converted to numbers
+type_of_amounts <- c("UP", "UAC", "IBNR", "CR", "PL", "UL") 
+
+# user defined functions --------------------------------------------------
+# import data: policy, claims and t0. Add suffix identifying the financial period CQ or LQ
+df_pol_cq <-   read_delim(
+    file = str_c(folder_w_files, "policy_data_cq.csv"), 
+    delim = ",", 
+    col_types = cols(.default = col_character())
+    ) %>% 
+    hablar::convert(num 
+                (any_of  (type_of_amounts) ) ,
+                fct(any_of("UWY"))
+                  ) %>% 
+  fn_add_suffix(col_names_any_of = type_of_amounts, suffix = "_CQ" )
+
+df_pol_lq <-   read_delim(
+    file = str_c(folder_w_files, "policy_data_lq.csv"), 
+    delim = ",", 
+    col_types = cols(.default = col_character())
+    ) %>% 
+    hablar::convert(num 
+                (any_of  (type_of_amounts) ) ,
+                fct(any_of("UWY"))
+                  ) %>% 
+  fn_add_suffix(col_names_any_of = type_of_amounts, suffix = "_LQ" )
+
+df_clm_cq <-   
+  read_delim(
+    file = str_c(folder_w_files, "claims_data_cq.csv"), 
+    delim = ",", 
+    col_types = cols(.default = col_character())
+    )  %>% 
+    hablar::convert(num 
+                (any_of  (type_of_amounts) ) ,
+                fct(any_of("UWY"))
+                  ) %>% 
+  fn_add_suffix(col_names_any_of = type_of_amounts, suffix = "_CQ" )
+
+df_clm_lq <-   
+  read_delim(
+    file = str_c(folder_w_files, "claims_data_lq.csv"), 
+    delim = ",", 
+    col_types = cols(.default = col_character())
+    )  %>% 
+    hablar::convert(num 
+                (any_of  (type_of_amounts) ) ,
+                fct(any_of("UWY"))
+                  ) %>% 
+  fn_add_suffix(col_names_any_of = type_of_amounts, suffix = "_LQ" )
+
+df_T0 <-   
+  read_delim(
+    file = str_c(folder_w_files, "t0_data.csv"), 
+    delim = ",", 
+    col_types = cols(.default = col_character())
+    )  %>% 
+    hablar::convert(num( any_of (type_of_amounts) )) %>% 
+  fn_add_suffix(col_names_any_of = type_of_amounts, suffix = "_T0" )
+
+
+
+# denormalize data -> all tables into a master dataset --------------------
+# join initial expected values with policy data
+# fn_add_suffix(col_names_any_of = type_of_amounts, suffix = "_CQ")
+
+df_pol_cq_t0 <- df_pol_cq %>% left_join(df_T0) 
+
+# join policy data with claims data current quarter
+
+
+
+# the join makes the data too denormalized, need to delete numeric values from duplicated rows:
+df_cq_over_denorm <-
+  left_join(
+    x = df_pol_cq_t0 %>% select(-CR_CQ, -PL_CQ), #remove from policy data reported values to use them from the claims dataset
+    y = df_clm_cq, by = "POL_ID"
+          )
+
+
+df_pol_cq_t0 %>% summarize(sum(UP_CQ))
+df_cq_over_denorm %>% summarize(sum(UP_CQ))
+
+# fix over denormalization, create an index per policy ID which is the unique identifier prior join
+cq_num_var_tmp <- df_cq_over_denorm %>% select((where(is.numeric))) %>% colnames()
+cq_num_var <- cq_num_var_tmp[!(cq_num_var_tmp %in% c("PL_CQ", "CR_CQ"))]
+
+df_cq_fix_denorm <-  df_cq_over_denorm %>% ungroup() %>% 
+  group_by(POL_ID) %>% 
+  mutate(index = row_number()) %>% 
+  mutate(across(all_of(cq_num_var), ~if_else(index == 1, ., NA_real_))) %>% 
+  select(-index) %>% ungroup()
+
+
+# join policy data with claims data last quarter
+df_lq_over_denorm <- df_pol_lq %>% select(-CR_LQ, -PL_LQ) %>% #remove from policy data reported values to use them from the claims dataset
+  left_join(df_clm_lq, by = "POL_ID")
+
+df_pol_lq %>% summarize(sum(UP_LQ))
+df_lq_over_denorm %>% summarize(sum(UP_LQ, na.rm = T))
+
+# fix over denormalization, create an index per policy ID which is the unique identifier prior join
+
+lq_num_var_tmp <- df_lq_over_denorm %>% select((where(is.numeric))) %>% colnames()
+lq_num_var <- lq_num_var_tmp[!(lq_num_var_tmp %in% c("PL_LQ", "CR_LQ"))]
+
+df_lq_fix_denorm <-  df_lq_over_denorm %>% ungroup() %>% 
+  group_by(POL_ID) %>% 
+  mutate(index = row_number()) %>% 
+  mutate(across(all_of(lq_num_var), ~if_else(index == 1, ., NA_real_))) %>% 
+  select(-index) %>% ungroup()
+
+df_pol_lq %>% summarize(sum(UP_LQ))
+df_lq_fix_denorm %>% summarize(sum(UP_LQ, na.rm = T))
+
+
+# full join current quarter and last quarter data, if data is in hte current financial period but not in the last we want to know
+# on the same token, data that was present in the last quarter but not in the current should also be showned!  
+
+
+df_cq_lq <- full_join(df_cq_fix_denorm, df_lq_fix_denorm) %>% 
+  relocate(where(is.numeric), .after = last_col())
+
+
+df_cq_lq
+# EXPORT MASTER TABLE TO SEE WHAT YOU GOT ---------------------------------
+# write_csv(df_cq_lq, str_c(path_output, "df_joined.csv"), na = "")
+
+# defined numeric values of the full join
+joined_num_col <- df_cq_lq %>% select(where(is.numeric)) %>% colnames()
+joined_all_col <- colnames(df_cq_lq)
+joinend_non_num_col <- setdiff(joined_all_col, joined_num_col)
+
+
+# avoid unecessary splitting of rows, all descriping attributes should be unique 
+df0 <- df_cq_lq %>% 
+# read_csv(paste0(path_output, "df_joined.csv"), 
+                # col_types = cols( .default = col_character() )) %>% 
+  hablar::convert(num 
+                  (all_of (joined_num_col) ) ,
+                  fct(any_of("UWY")))
+
+
+
+df1 <- df0  %>% 
+  group_by(
+    across(
+      where( negate(is.numeric) )
+    ) 
+  ) %>% 
+  summarise(
+    across(
+      where ( is.numeric ), sum, na.rm = T ) )  %>% 
+    mutate(
+    CLAIM_DESC = str_remove(CLAIM_DESC, fixed("CLNAME1/")),
+    CLAIM_DESC = str_remove(CLAIM_DESC, fixed("CLNAME2/")),
+    CLAIM_DESC = str_remove(CLAIM_DESC, fixed("<NA>")),
+    CLAIM_DESC = str_to_lower(CLAIM_DESC)
+) 
+  
+
+
+
+df2 <- df1 %>% mutate(
+  # current quarter figures for Net Premium, Ultimate Loss and Tech. Result
+  UNP_CQ = sum(UP_CQ, UAC_CQ, na.rm = T),
+  RL_CQ = sum(CR_CQ, PL_CQ, na.rm = T),
+  UL_CQ = sum(RL_CQ, IBNR_CQ, na.rm = T),
+  TR_CQ = sum(UNP_CQ, UL_CQ, na.rm = T),
+  
+  UNP_LQ = sum(UP_LQ, UAC_LQ, na.rm = T),
+  RL_LQ = sum(CR_LQ, PL_LQ, na.rm = T),
+  UL_LQ = sum(RL_LQ, IBNR_LQ, na.rm = T),
+  TR_LQ = sum(UNP_LQ, UL_LQ, na.rm = T),
+  
+  UNP_T0 = sum(UP_T0, UAC_T0, na.rm = T),
+  TR_T0 = sum(UNP_T0, UL_T0, na.rm = T)
+  
+  
+)
+
+# reorder columns
+names_columns <-df2 %>% colnames()
+names_cq <- str_subset(names_columns, pattern = "_CQ$")
+names_lq <- str_subset(names_columns, pattern = "_LQ$")
+names_t0 <- str_subset(names_columns, pattern = "_T0$")
+names_of_fig <- c(names_cq, names_lq, names_t0) 
+names_of_non_fig <- setdiff(names_columns, names_of_fig)
+
+
+df3 <- df2 %>% ungroup() %>% 
+  fn_fct_by_value(fct = Land, by_value = UP_CQ) %>% 
+  fn_fct_by_value(fct = Industry, by_value = UP_CQ) %>% 
+  fn_fct_by_value(fct = LE, by_value = UP_CQ) %>% 
+  fn_fct_by_value(fct = LoB, by_value = UP_CQ)
+
+
+df_wide <- df3 %>% select(names_of_non_fig, names_of_fig) 
+df_long <- df3 %>% pivot_longer(cols = names_of_fig, values_to = "amount", names_to = "type_of_amount" )  
+
+# check invalidation rules (check the cache files!!!)
+# name_check <- df_wide %>% arrange(desc(UP_CQ)) %>% select(Insured) %>% pull() %>% .[1]
+
+```
+
+
+```{r metadata, include=F}
+df_mtdata <- read_delim(
+    file = "Database//metadata.csv", 
+    delim = ",", 
+    col_types = cols(.default = col_character())
+    )
+df_mtdata
+
+cq_date <-  df_mtdata$date[1] %>% lubridate::dmy()
+lq_date <-  df_mtdata$date[2] %>% lubridate::dmy()
+
+cq_ext_date <- df_mtdata$`extraction date`[1]
+cq_ext_date
+lq_ext_date <- df_mtdata$`extraction date`[2]
+lq_ext_date
+
+cq_ext_time <- df_mtdata$`extraction time`[1]
+lq_ext_time <- df_mtdata$`extraction time`[2]
+
+valuation_month <- lubridate::month(cq_date)
+valuation_year <- lubridate::year(cq_date)
+quarter_title <- switch(as.character(valuation_month),
+       "3" = "Q1",
+       "6" = "Q2",
+       "9" = "Q3",
+       "12" = "Q4",
+       "not a valid valuation date")
+  
+quarter_ordinal <- switch(as.character(valuation_month),
+       "3" = "first",
+       "6" = "second",
+       "9" = "third",
+       "12" = "fourth",
+       "not a valid valuation date")
+  
+
+valuation_txt <- str_c("Overview as of ", quarter_title, " ", valuation_year)
+
+date_full_cq <- format(cq_date, "%B %d, %Y")
+date_full_lq <- format(lq_date, "%B %d, %Y")
+
+```
+
+
+
+```{r uwy_range, include=F}
+oldest_uwy <-  levels(df_wide$UWY)[1]
+current_uwy <-    levels(df_wide$UWY)[length(levels(df_wide$UWY))]
+
+current_uwy_v <- as.integer(current_uwy)
+oldest_uwy_v <- as.integer(oldest_uwy)
+
+```
+
+<br>
+
+# Introduction
+
+
+Remarkable Re (RR) is a wholly fictional company part of the Remarkable Insurance Group (RIG) and it is one of the world's leading providers of Commercial Liability Insurance.
+
+Headquartered in Zurich, Switzerland, it was founded in May 2021 for the purpose of the *'RStudio Webinar - Rethink Reporting with Automation'*. 
+
+The scope of this study is to provide a quarterly overview of RR's financial situation to its internal key stakeholders.
+
+This report should be read in conjunction with the non-existing detailed document describing RIG's Swiss Solvency Test (SST) and its internal model.
+
+The current version is only a draft and is not suitable for any other purpose than the set out above.
+
+
+This **`r fn_text("remarkable", color_red)`** report should not be quoted or referred to any third parties other than FINMA's and RR's independent auditors.
+
+All figures are in USD unless stated otherwise. 
+
+Data as of `r date_full_cq` was extracted on `r cq_ext_date` at `r cq_ext_time` while data as of `r date_full_lq` was extracted on `r lq_ext_date` at `r lq_ext_time`.
+
+
+---
+title: "Remarkable Re's  \n `r valuation_txt`"
+---
+
+<br>
+
+# Remarkable's Technical Results
+
+## Quarterly results
+
+The table below displays the quarterly technical result as of `r date_full_cq`.
+
+Note that all values are according to their financial impact for example, negative losses represent an increase in loss amount. 
+
+
+```{r chunk-qrt-tr, warning=F, message=F}
+
+curr_fp <- "Current Financial Period"
+last_fp <- "Last Financial Period"
+oldest_uwy <-  levels(df_wide$UWY)[1]
+current_uwy <- levels(df_wide$UWY)[length(levels(df_wide$UWY))]
+uwy_minus1 <- levels(df_wide$UWY)[length(levels(df_wide$UWY)) - 1]
+
+uwy_minus1_and_prior <- str_c("<=", (as.integer(current_uwy) - 1) %>% as.character())
+
+
+# i want the bs to look P-C, PL, CS, IBNR, UL, TR, ULR
+my_unit_format <- scales::number_format(big.mark = "\'", scale = 1/1e6, accuracy = .1)
+my_pct_format <- scales::percent_format( accuracy = 1)
+my_sim_pct_format <- scales::number_format(big.mark = "\'", scale = 1, accuracy = 1)
+
+
+
+
+df_fp1 <- df_long %>% 
+  rename(toa = type_of_amount) %>%    
+  group_by(toa, UWY) %>% summarise(amount = sum(amount, na.rm = T)) %>% 
+  filter( str_detect(toa, pattern = "_CQ$|_LQ$")) %>%
+  # filter( str_detect(type_of_amount, pattern = "^(UNP)", negate = T)) %>% 
+  mutate(FP = 
+             if_else(
+               str_sub(toa, -2 ) == "CQ", 
+                "CQ", 
+                "LQ"),
+             toa = str_remove(toa, "_.*"),
+         UWY = if_else(UWY == current_uwy, "uwy_curr", "uwy_prior")
+         
+         ) %>% ungroup()  %>% 
+  mutate(FP = fct_relevel(FP, levels(c("CQ", "LQ"))))  
+  
+
+df_fp2 <- df_fp1 %>% group_by(
+              across(
+                  where(
+                    negate
+                      (is.numeric)
+                    )
+                  )
+              ) %>% 
+  summarize(amount = sum(amount)) %>% 
+  pivot_wider(names_from = c(UWY, FP), values_from = amount)
+
+
+df_fp3 <- df_fp2 %>% transmute(
+      "uwy_curr" = 
+          .data[["uwy_curr_CQ"]] - 
+          .data[["uwy_curr_LQ"]],
+            
+      "uwy_prior" =
+          .data[["uwy_prior_CQ"]] - 
+          .data[["uwy_prior_LQ"]]
+
+      ) %>% 
+        ungroup()  %>%
+    
+  mutate(total_delta  = rowSums(.[2:3], na.rm = T)) 
+
+order_toa1 <- c("UP", "UAC", "UNP", "PL", "CR", "IBNR", "UL", "TR")
+
+
+df_fp4 <- df_fp3 %>%  
+  filter(toa %in% order_toa1) %>% 
+  mutate(toa = fct_relevel(toa, order_toa1)) %>% 
+  arrange(toa) 
+
+
+order_toa2 <- c("Premium:", "UP", "UAC", "UNP", "Losses:", "PL", "CR", "IBNR", "UL", "TR")
+
+
+str_ident <- "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;- "
+
+fn_toa_2_txt <- function(toa) {
+  switch(toa,
+         "UP" = "Written Premium",
+         "UAC" = "Acquisition Costs",
+         "PL" = "Paid Losses",
+         "CR" = "Case Reserves",
+         "RL" = "Reported Losses",
+         "UL" = "Ultimate Losses",
+         "TR" = "Technical Results",
+  
+         toa
+         )
+}
+
+df_fp5 <- df_fp4 %>% 
+  add_row(toa = c("Premium:", "Losses:")) %>% 
+  mutate(toa = fct_relevel(toa, order_toa2)
+         ) %>%
+  arrange(toa) %>% 
+  # mutate(
+  #       across(where(is.numeric), ~ . / 1e6)
+  #       ) %>% 
+  # 
+  mutate(toa2 =
+           case_when(
+             toa == "UP" ~ str_c(str_ident, fn_toa_2_txt("UP")),
+             toa == "UAC" ~ str_c(str_ident, fn_toa_2_txt("UAC")),
+             toa == "UNP" ~ "Net Premium",
+             toa == "PL" ~ str_c(str_ident, fn_toa_2_txt("PL")),
+             toa == "CR" ~ str_c(str_ident, fn_toa_2_txt("CR")),
+             toa == "IBNR" ~ str_c(str_ident, fn_toa_2_txt("IBNR")),
+             toa == "UL" ~ fn_toa_2_txt("UL"),
+             toa == "TR" ~ fn_toa_2_txt("TR"),
+
+             TRUE ~ as.character(toa)
+           )
+    ) %>% 
+  
+  mutate(across(where(is.numeric), number, big.mark = "'", accuracy = 0.1, suffix = "m", scale = 1 / 1e6  )) %>% 
+  relocate(toa2, .after = toa ) %>% select(-toa)
+           
+
+kbl_tip1 <- "Technical Result = Net Premium + Ultimate Loss"
+
+df_fp5[10, 1] <- text_spec(df_fp5[10 , 1 ],format = "html", popover = kbl_tip1)
+df_fp5[10, 2] <- text_spec(df_fp5[10 , 2 ],format = "html", popover = kbl_tip1)
+df_fp5[10, 3] <- text_spec(df_fp5[10 , 3 ],format = "html", popover = kbl_tip1)
+df_fp5[10, 4] <- text_spec(df_fp5[10 , 4 ],format = "html", popover = kbl_tip1)
+
+
+ kbl_qrt <- df_fp5  %>% 
+   mutate(across(everything(),  ~replace_na(., ""))) %>% 
+    knitr::kable(format = "html", escape = F,
+              align = "lccr",
+              col.names = c("USD millions",
+                             current_uwy,
+                             str_c(uwy_minus1, " & prior"),
+                             "Total"
+                             ), caption = "Quarterly Technical Result in USD millions"
+
+ 
+             ) %>% 
+  kable_styling(
+    bootstrap_options = c("condensed"), 
+    full_width = F, 
+    position = "l" 
+    # font_size = 14
+    # stripe_color not available in html!!!
+    )  %>% 
+  row_spec(0, color = color_hd, extra_css = str_c("font-weight: normal; vertical-align: top;", "border-bottom: 1px solid",  color_font, ";")) %>% 
+  row_spec(c(1, 2, 5, 6, 7), extra_css = "border-bottom: hidden;") %>% 
+  row_spec(0, color = color_hd, extra_css = str_c("font-weight: normal;")) %>%   
+  row_spec(1:nrow(df_fp5), color = color_font) %>%  
+  row_spec(c(4, 9), background = color_bg) %>% 
+  row_spec(0, extra_css = "vertical-align: top;") %>% 
+  column_spec(column = 1, width = "6cm") %>% 
+  column_spec(column = 2:4, width = "3cm") %>% 
+  row_spec(row = c(2, 3, 6, 7, 8), extra_css = "height: 2px; padding: 2px") %>% 
+  row_spec(10, color = color_hd) %>% 
+  row_spec(c(4, 9), extra_css = "border-bottom: 1px solid #2E2B21; border-top: 1px dashed #2E2B21;" ) %>% 
+  add_header_above( c(" " = 1, "Underwriting Year" = 2, " " = 1), extra_css = "font-weight: normal;")  
+  # add_footnote(str_wrap("'Technical Result' is the sum of 'Net Premium' with 'Ultimate Loss'", width = 38), notation = "none") 
+  
+
+
+
+```
+
+```{r qrt-tr}
+kbl_qrt
+```
+
+
+```{r comment_maker, include=FALSE}
+# hold it -----------------------------------------------------------------
+threshold <- 0.15
+
+
+df_tr1 <-
+  df_wide %>%
+  group_by(UWY) %>%
+  summarise(across(
+    where(is.numeric),
+    ~ sum (., na.rm = TRUE)
+  )
+  ) %>%
+  select(UWY, ends_with("_CQ"), ends_with("_LQ")) %>%
+  mutate(up_mov = UP_CQ - UP_LQ,
+         uac_mov = UAC_CQ - UAC_LQ,
+         np_mov = up_mov + uac_mov,
+         pl_mov = PL_CQ - PL_LQ,
+         cr_mov = CR_CQ - CR_LQ,
+         rl_mov = pl_mov + cr_mov,
+         ibnr_mov = IBNR_CQ - IBNR_LQ,
+         tr_mov = up_mov + uac_mov + pl_mov + cr_mov + ibnr_mov
+  )  %>%
+  
+  select(UWY, ends_with("_mov")) %>%
+  srd_add_total_row(var_w_total = UWY, var_w_total_as_fct = TRUE) %>%
+  mutate(across(
+    where(is.numeric),
+    ~ scales::number(x = ., accuracy = 0.1, scale = 1/1e6),
+    .names = "txt_{.col}"))
+
+
+df_tr2 <- df_tr1 %>%
+  select_if(.predicate =  ~ !is.character(.)) %>%
+  filter(UWY == "Total") %>%
+  pivot_longer(!UWY) %>%
+  mutate(
+    txt_value =   
+      scales::number(
+        x = value, 
+        accuracy = 0.1, 
+        scale = 1/1e6, 
+        suffix = "m", prefix = "USD ", big.mark = "'")) %>%
+  filter(name %in% c("up_mov","uac_mov", "rl_mov", "ibnr_mov")
+  )
+
+
+
+total_abs_result <- abs(df_tr2$value) %>% sum()
+total_abs_result
+total_result <- df_tr2$value %>% sum()
+
+total_sign_ge_0 <- total_result >= 0
+txt_pos_or_neg <- if_else(total_sign_ge_0 >= 0, "positive", "negative")
+
+df_tr3 <- df_tr2 %>%
+  mutate(driv_is_pos = total_sign_ge_0,
+         pos = value >= 0,
+         drivers_offsets = if_else(pos == driv_is_pos, "driver", "offset")
+  )
+
+df_tr4 <- df_tr3 %>%
+  filter(name != "tr_mov") %>%
+  mutate(abs_val = abs(value),
+         sum_abs_val = sum(abs_val),
+         norm_val = abs_val / sum_abs_val,
+         check_eq_1 = sum(norm_val) == 1
+  )  
+
+
+df_drivers <- df_tr4 %>% filter(drivers_offsets == "driver") %>% arrange(desc(norm_val))
+df_offsets <- df_tr4 %>% filter(drivers_offsets == "offset") %>% arrange(desc(norm_val))
+
+
+df_txt <- 
+  tibble(
+    name = c("up_mov", 
+             "uac_mov", 
+             "rl_mov", 
+             "ibnr_mov"),
+    txt_pos = c( 
+      "positive premium income",
+      "brokerage and commission expenses",
+      "positive loss development",
+      "IBNR releases"
+    ),
+    
+    txt_neg = c( 
+      "negative premium adjustments",
+      "brokerage and commission expenses",
+      "negative loss development",
+      "strengthening of IBNR reserves"
+    )
+  )
+
+df_tr4
+# if ibnr is positive and a drivers we may add due to low loss emergence in case losses are indeed low.
+ibnr_pos_TF <- if(df_tr4$value[df_tr4$name == "ibnr_mov"] > 0) {TRUE} else {FALSE}
+ibnr_drv_TF <- if(df_tr4$drivers_offsets[df_tr4$name == "ibnr_mov"] == "driver") {TRUE} else {FALSE}
+rl_mov_low_TF <- df_tr4$norm_val[df_tr4$name == "rl_mov"] < threshold
+
+
+
+txt_add_ibnr_mov_low_loss_TF <- rl_mov_low_TF + ibnr_pos_TF + ibnr_drv_TF == 3
+
+if(txt_add_ibnr_mov_low_loss_TF) {
+  df_txt <- df_txt %>% 
+    mutate(
+      txt_pos = if_else(name != "ibnr_mov", 
+                        txt_pos, 
+                        "IBNR releases due to low loss emergence")
+    )
+  
+}
+
+
+
+df_adv1 <- tibble( adverbs_v = c(0, 0.1, .25, .7, 0.9, 1),
+                   adverbs_d = c(" slightly", " partially","", " mainly", " overwhelmingly", " totally")
+)
+
+
+drv_pos_TF <- df_drivers$driv_is_pos[[1]]
+
+df_drivers2 <- 
+  df_drivers %>% 
+  mutate(
+    adv1 = df_adv1$adverbs_d[
+      findInterval(x = norm_val, df_adv1$adverbs_v)
+    ]
+  )  %>% 
+  left_join(df_txt, by = "name") %>%  
+  mutate(
+    drv_pos_TF = drv_pos_TF,
+    txt_sel = if_else(drv_pos_TF, txt_pos, txt_neg)) %>% 
+  select(name, value,txt_value, norm_val, adv1, txt_sel)  
+
+
+
+df_drivers3 <- df_drivers2 %>% 
+  filter(norm_val >= threshold) 
+
+# mutate(txt_sel = str_c(txt_value, " from ", txt_sel))
+
+df_drivers3
+output_drv <- vector("character", nrow(df_drivers2))
+
+
+
+num_of_rows_drv <- nrow(df_drivers3)
+num_of_loops_drv <- 1:num_of_rows_drv
+num_of_loops_drv
+for (i in num_of_loops_drv) {
+  if (i == 1) {
+    txt_comment_drv <- str_c("The ", txt_pos_or_neg, " result is", 
+    
+                             df_drivers3$adv1[[i]], 
+                             " driven by", 
+                             collapse = TRUE)
+    
+    txt_comment_drv <- str_c(txt_comment_drv, " ", 
+                             "",  
+                             df_drivers3$txt_sel[[i]])
+  } else if (i == 2) {txt_comment_drv <- str_c(txt_comment_drv, " reinforced by ", 
+                                               # df_drivers3$txt_value[[i]]," of ", 
+                                               df_drivers3$txt_sel[[i]])}
+  
+  else {
+    txt_comment_drv <- str_c(txt_comment_drv, ", ", knitr::combine_words( df_drivers3$txt_sel[3:num_of_loops_drv] ))
+  }
+}
+
+drv_base <- df_drivers3$norm_val %>% sum()
+
+
+# offsets
+
+df_adv_offsets <- tibble( adverbs_v = c(0, 0.1, .5, .7, 0.9, 1),
+                          adverbs_d = c("slightly", "partially", "partially", "significantly", "overwhelmingly", "totally")
+)
+
+df_offsets2 <- 
+  df_offsets %>% 
+  mutate(norm_val2 = norm_val / drv_base) %>%
+  mutate(
+    adv1 = df_adv_offsets$adverbs_d[
+      findInterval(x = norm_val2, df_adv_offsets$adverbs_v)
+    ]
+  )  %>% 
+  left_join(df_txt, by = "name") %>%  
+  mutate(
+    drv_pos_TF = !drv_pos_TF,
+    txt_sel = if_else(drv_pos_TF, txt_pos, txt_neg)) %>% 
+  select(name, value, norm_val, norm_val2, adv1, txt_sel, txt_value) 
+
+
+
+
+df_offsets3 <- df_offsets2 %>% 
+  filter(norm_val >= threshold)  
+  # mutate(txt_sel = str_c(txt_value, " from ", txt_sel))
+
+output_off <- vector("character", nrow(df_drivers2))
+
+num_of_rows_off <- nrow(df_offsets3)
+num_of_loops_off <- 1:num_of_rows_off
+
+# kick offsets
+if (num_of_rows_off > 0) {
+  for (i in num_of_loops_off) {
+    if (i == 1) {
+      txt_comment_off <- if_else(num_of_rows_drv == 1, ", which is ", ", which are ")
+      txt_comment_off <- str_c(  txt_comment_off, df_offsets3$adv1[[i]], " offset by ", df_offsets3$txt_sel[[i]])
+    } else {
+      txt_comment_off <- str_c(txt_comment_off, ", as well as ", knitr::combine_words( df_offsets3$txt_sel[2:num_of_rows_off] ))
+    }
+  }
+} else {txt_comment_off <- ""}
+
+txt_explain_qrt_mov <- (str_c(txt_comment_drv, 
+                txt_comment_off, ".")
+                )
+txt_total_result <- scales::number(x = total_result,
+                              scale = 1 / 1e6,
+                              big.mark = "'",
+                              accuracy = 0.1,
+                              suffix = "m")
+
+```
+
+
+> `r fn_text("The book experienced a", "slategrey")`\
+> `r fn_text(str_c(txt_pos_or_neg, " technical result of"), color_blue)`\
+> **`r fn_text(txt_total_result, color_blue, 38)`**\
+> `r fn_text(str_c("for contract years ", oldest_uwy, " to ", current_uwy), "slategrey")`
+
+`r txt_explain_qrt_mov`
+
+Expand the section below to view the 10 largest reported loss movements during the `r quarter_ordinal` quarter of `r current_uwy`.\
+<details><summary>Description of main quarterly loss movements</summary>
+
+<div class = "clms">
+
+```{r main_qrt_loss_descrip, results='asis' }
+df_rl_mov <- df_wide %>% 
+  mutate(
+    RL_mov = RL_CQ - RL_LQ, 
+    RL_mov_abs = abs(RL_mov)
+    )  %>% 
+  top_n(n = 10, wt = RL_mov_abs) %>%  
+  
+  arrange ( desc(UWY), desc(RL_mov_abs) ) %>% 
+  mutate(
+        RL_mov_txt = number(RL_mov, accuracy = .01, big.mark = "'", scale = 1/1e6, suffix = "m"),
+        RL_mov_txt = str_c("USD ", if_else(RL_mov > 0, str_c("+", RL_mov_txt), RL_mov_txt)),
+        uwy_txt = str_c("Underwriting year", " ", UWY, ":"),
+        RL_mov_type_txt = case_when(
+              RL_LQ == 0 ~ "new loss",
+              RL_mov < 0 ~ "loss worsening",
+              TRUE ~ "loss improvement"
+         ),
+        RL_CQ_txt = number(RL_CQ, accuracy = .01, big.mark = "'", scale = 1/1e6, suffix = "m"),
+
+        RL_mov_to_from_txt = if_else(RL_LQ == 0, "", str_c("total to date: ", RL_CQ_txt, ", ") ),
+        
+
+         ) %>% 
+          mutate(across(where(is.factor), as.character))
+
+
+
+num_of_loops <- nrow(df_rl_mov)
+
+
+for (i in 1:num_of_loops) {
+  if (i == 1) {
+  
+    cat( "**", df_rl_mov$uwy_txt[i],"**", sep = "\n")
+                  
+                  
+                      cat("\n - ", df_rl_mov$RL_mov_txt[i], " ",
+                          df_rl_mov$RL_mov_type_txt[i], " on ", 
+                          df_rl_mov$Insured[i], " (", 
+                          df_rl_mov$RL_mov_to_from_txt[i], 
+                          "Region: ", df_rl_mov$Land[i], ", ", 
+                          "Industry: ", df_rl_mov$Industry[i], ", ",
+                          "Entity: ", df_rl_mov$`LE`[i], ")",
+                          sep = "")
+                           
+                     
+    
+  } else {
+        if (df_rl_mov$UWY[i] != uwy_tmp ) {
+              cat("\n", "**", df_rl_mov$uwy_txt[i], "**", sep ="\n")
+                  
+                    
+                      cat("\n - ", df_rl_mov$RL_mov_txt[i], " ",
+                         df_rl_mov$RL_mov_type_txt[i], " on ", 
+                          df_rl_mov$Insured[i], " (", 
+                          df_rl_mov$RL_mov_to_from_txt[i], 
+                         "Region: ", df_rl_mov$Land[i], ", ",
+                         "Industry: ", df_rl_mov$Industry[i], ", ",
+                          "Entity: ", df_rl_mov$`LE`[i], ")",
+                          sep = "")
+                           
+                     
+                    
+          
+                
+                }     else {
+                  
+                      cat("\n - ", df_rl_mov$RL_mov_txt[i], " ",
+                         df_rl_mov$RL_mov_type_txt[i], " on ", 
+                          df_rl_mov$Insured[i], " (", 
+                          df_rl_mov$RL_mov_to_from_txt[i], 
+                         "Region: ", df_rl_mov$Land[i], ", ",
+                         "Industry: ", df_rl_mov$Industry[i], ", ",
+                         "Entity: ", df_rl_mov$`LE`[i], ")",
+                          sep = "")
+
+              }
+    }
+  
+  uwy_tmp <- df_rl_mov$UWY[i]
+}
+
+
+# cat("\n - ", df_rl_mov$RL_mov_txt[i]," ", df_rl_mov$RL_mov_type_txt[i], " on ", df_rl_mov$Insured[i], "-", df_rl_mov$Land[i], ".", df_rl_mov$RL_mov_to_from_txt[i])
+
+
+
+```
+
+</div>
+</details>
+
+
+
+
+
+```{r chunk_p_tr_uwy, include=F}
+
+total_tr_title <- str_c("Technical Result\n", oldest_uwy, "-", current_uwy)
+
+color_UP <- "#7fd4ef" 
+color_RL <- "#eff2f1"
+color_UL <- "#ec6685"
+color_TR_neg <- "#E00034"
+color_TR_pos <- "#00463b"
+color_TR_neg_txt <- "white"
+color_TR_pos_txt <- color_font
+
+
+df_np_rl_tr1 <-  df_long %>% rename(toa = type_of_amount) %>% 
+    filter(toa == "UNP_CQ" | toa == "UL_CQ") %>% 
+    mutate ( amount = if_else( toa == "UL_CQ", -amount, amount ) ) %>% 
+    group_by(UWY, toa) %>% 
+    summarise(across(where(is.numeric), sum, na.rm = T)) %>% 
+    ungroup() %>% 
+    add_row(UWY = total_tr_title,
+            toa = "TR_CQ",
+          amount = df_wide$TR_CQ %>% sum()
+          )   %>% 
+    mutate( toa = fct_relevel(toa, c("UNP_CQ", "UL_CQ", "TR_CQ"))) 
+
+
+df_np_rl_tr2 <- df_np_rl_tr1 %>% filter(toa != "RL_CQ")
+
+df_tr_uwy <-  df_long %>% rename(toa = type_of_amount) %>% 
+              filter(toa == "TR_CQ") %>% 
+              group_by(UWY, toa) %>% 
+              summarise(across(where(is.numeric), sum, na.rm = T)) %>% 
+              ungroup() %>% 
+              mutate(amount_cum = cumsum(amount)) 
+
+
+num_of_uwy <- df_tr_uwy$UWY %>% unique() %>% length
+
+# defne the sign and the color for the tech result depending on if it is positive or negative
+TR_CQ   <- df_tr_uwy$amount %>% sum()
+if (TR_CQ[1] < 0) {tr_sign <- ""} else (tr_sign <- "+")
+if (TR_CQ[1] < 0 ) {color_TR <- color_TR_neg } else {color_TR <- color_TR_pos}
+if (TR_CQ[1] < 0 ) {color_TR_txt <- color_TR_neg_txt } else {color_TR_txt <- color_TR_pos_txt}
+
+
+# creating values for the line to start at zero ---------------------------
+
+value_start <- df_tr_uwy[1, 4] %>% pull() #selects UWY and TR amount (one row two columns)
+
+df_sliced <- slice(df_tr_uwy, 1) %>% mutate(amount = 0, amount_cum = 0) #it starts at zero before the first uwy)
+df_sliced2 <- slice(df_tr_uwy, 2) %>% mutate(amount = value_start, amount_cum = value_start) #the second entry is atually the first uwy
+df_geom_line <- df_sliced %>% bind_rows(df_sliced2) #bind the 2 rows for a df with 2rows and 2columns for kick-off
+
+# df for the geotext with the labels of the UNP_CQ and UL_CQ
+df_tr_txt <-  df_np_rl_tr1 %>% 
+          mutate(
+          txt = scales::number(x = amount, accuracy = .1, scale = 1/1e6, suffix = "m"),
+          txt = if_else(toa == "TR_CQ", str_c(tr_sign, txt), txt)
+      ) 
+
+
+# df for the geotext with the labels of the grand total, hence the filter when uwy == title of hte total tr
+df_tr_uwy_txt <-  df_tr_txt %>% filter(toa != "TR_CQ")
+df_tr_total_txt <- df_tr_txt %>% filter(UWY == total_tr_title) %>% 
+  mutate(txt = str_c(txt))
+
+# transperancy of the alpha
+alpha_line_point <- 1
+
+p_tr_uwy <-
+  ggplot(df_np_rl_tr2 ) + 
+                     aes(x = UWY, y = amount, fill = toa  ) +
+  
+  geom_col(position = "dodge", color = "darkgrey") +
+  
+  
+  scale_fill_manual(
+    values = c(color_UP, color_UL, color_TR),
+    labels = c(str_c("Premium","\n", "(Net of comm.)"),"Ultimate\nLoss", total_tr_title),
+    breaks = c("UNP_CQ", "UL_CQ", "TR_CQ")
+  ) +
+  
+  geom_line(data = df_tr_uwy,
+            aes(x = UWY, y = amount_cum, group = 1), alpha = alpha_line_point,
+            color = color_TR,
+            size = .5, linetype = "dashed",
+            inherit.aes = F,
+            position = position_nudge(x = 0.5)
+  ) +
+  
+  geom_line(data = df_geom_line,
+            aes(x = UWY, y = amount_cum, group = 1), alpha = alpha_line_point,
+            color = color_TR,
+            size = .5, linetype = "dashed",
+            inherit.aes = F,
+            position = position_nudge(x = -0.5)
+  ) +
+  geom_point(data = df_tr_uwy, size = 3,
+             color = color_TR,
+             aes(x = UWY, y = amount_cum),
+             position = position_nudge(x = 0.5),
+             inherit.aes = F) +
+  
+  geom_point(data = df_sliced, size = 3,
+             color = color_TR,
+             aes(x = UWY, y = amount),
+             position = position_nudge(x = -0.5),
+             inherit.aes = F) +
+  
+  
+  
+  
+  
+  scale_x_discrete(name = "Underwriting Year",
+  ) + 
+  scale_y_continuous(name ="USDm", 
+                     labels = unit_format(accuracy = 1, big.mark = "'", suffix = "m", scale = 1/1000000),
+                     breaks = pretty_breaks(n = 10)) +
+  
+  
+  geom_text(data = df_tr_uwy_txt,
+            aes(y = (amount), label = txt, fontface = "plain"),
+            color = "grey20",
+            position = position_dodge(.9),
+            vjust = -.3
+
+    ) +  
+    geom_text(data = df_tr_total_txt,
+            aes(y = (amount), label = txt, fontface = "bold"),
+            color = color_TR_txt,
+            position = position_dodge(.9),
+            vjust = -.3
+
+    )  +
+
+  
+  theme(
+    axis.text.x = element_text(face = c(rep("plain", num_of_uwy), "bold")),
+    panel.background = element_rect(fill = NA, color = NA),
+    legend.position = "top",
+    panel.grid.major.y =  element_line(colour = "darkgrey", linetype = "dotted", size = .5)
+  ) +
+  guides(
+    fill = guide_legend(title = NULL, label.vjust = 1))
+
+
+
+  
+  
+  
+```
+
+
+<br>
+
+## Inception to date results
+
+The tables below display Remarkable Re's Technical Results from inception to date as of `r date_full_cq`.
+
+**By Underwriting Year**\
+```{r kbl-fin-res-uwy, include=T, message = F, warning=F, eval=FALSE}
+lab_total <- str_c("Total (", oldest_uwy, "-", current_uwy, " )")
+lab_uwy_wind <- str_c(oldest_uwy, "-", current_uwy)
+
+
+
+tbl_bs1 <- df_wide %>% select(UWY, (ends_with("_CQ"))) %>% 
+  group_by(UWY) %>% 
+  summarise(across(where(is.numeric), sum)) %>% 
+  add_row(
+    UWY = "Total", 
+    df_wide %>%  ungroup() %>% select(UWY, (ends_with("_CQ"))) %>% 
+   summarise(across(where(is.numeric), sum))
+) %>% mutate(
+  ULR_CQ = -UL_CQ / UP_CQ,
+  ACR_CQ = -UAC_CQ / UP_CQ,
+  CLR_CQ = ULR_CQ + ACR_CQ
+  ) %>% relocate(UNP_CQ, .after = UAC_CQ) %>% relocate(IBNR_CQ, .after = RL_CQ)
+
+
+
+tbl_bs2 <- tbl_bs1 %>% 
+  mutate(hl_flag = if_else(CLR_CQ >= 1, 1, 0)  ) %>% 
+  mutate(across(UP_CQ:TR_CQ, ~number(x = ., big.mark = "'", scale = 1/1e6, accuracy = .1) ) ) %>% 
+  mutate(across(ULR_CQ:CLR_CQ, ~percent(x = ., accuracy = 1) ) ) %>% 
+  select(UWY, UP_CQ, UAC_CQ, RL_CQ, IBNR_CQ, UL_CQ, TR_CQ, ULR_CQ, CLR_CQ, hl_flag) %>% 
+    rename(
+      "UW Year" = UWY,
+                             "Premium" = UP_CQ,
+                             "Acquisition Costs" = UAC_CQ,
+                             "Reported Losses" = RL_CQ,
+                            "IBNR" = IBNR_CQ,
+                            "Ultimate Loss" = UL_CQ, 
+                            "Technical Result" = TR_CQ,
+                            "Ultimate Loss Ratio" = ULR_CQ,
+                            "Combined Loss Ratio" = CLR_CQ
+      
+      
+    )
+
+
+tip_TR <- str_wrap("= Premium + (Acquisition Costs) + (Ultimate Loss)", width = 35)
+tip_ULR <- str_wrap("= - (Ultimate Loss) / Premium", width = 35)
+tip_CLR <- "= (Ultimate Loss Ratio) + (-Acquisition Costs) / Premium"
+
+
+
+last_row <- nrow(tbl_bs2) 
+color_hd <- "#00a9e0"  
+color_font <- "#282828"
+
+names(tbl_bs2)[7] <- text_spec(names(tbl_bs2)[7],format = "html", popover = tip_TR)
+names(tbl_bs2)[8] <- text_spec(names(tbl_bs2)[8],format = "html", popover = tip_ULR)
+names(tbl_bs2)[9] <- text_spec(names(tbl_bs2)[9],format = "html", popover = tip_CLR)
+
+
+# kbl_tr_uwy <- 
+tbl_bs2  %>%
+  mutate_at(.vars = 9, .funs = ~ if_else(tbl_bs2$hl_flag ==  1, cell_spec(., background = "yellow"), .)) %>% 
+  select(-hl_flag) %>% 
+    
+
+      knitr::kable(format = "html", escape = F,
+              align = "lrrrrrrrr",
+               caption =  "Inception to date Technical Result in USD millions"
+              ) %>%
+  kable_styling(
+    bootstrap_options = c("condensed"),
+    full_width = F,
+    position = "l" #, font_size = 14
+    # stripe_color not available in html!!!
+    ) %>% 
+
+  row_spec(0, color = color_hd, extra_css = str_c("font-weight: normal; vertical-align: top;", "border-bottom: 1px solid",  color_font, ";")) %>%
+
+  row_spec(1:nrow(tbl_bs2), color = color_font, extra_css = "border-bottom: hidden;") %>%
+
+  row_spec(seq(1, nrow(tbl_bs2), 2) , background = color_bg) %>%
+
+  # row_spec(0, extra_css = "vertical-align: top;") %>%
+  # column_spec(column = 1, width = "10em") %>%
+  # column_spec(column = 2:5, width = "6em") %>%
+  row_spec(row = nrow(tbl_bs2) -1, extra_css = "border-bottom: 1px solid #2E2B21;") %>%
+  row_spec(row = nrow(tbl_bs2), color = color_hd, background = "white")
+
+
+
+
+
+
+# prepare for inline talking!
+avg_lr <- my_pct_format( slice(tbl_bs1, nrow(tbl_bs1))$ULR_CQ)
+
+avg_clr <- my_pct_format( slice(tbl_bs1, nrow(tbl_bs1))$CLR_CQ)
+
+df_highest_clr <- tbl_bs1 %>% filter(CLR_CQ == max(CLR_CQ))
+
+worst_clr <- my_pct_format(  df_highest_clr$CLR_CQ )
+worst_clr_uwy <- df_highest_clr$UWY 
+worst_clr_lr <- my_pct_format(  df_highest_clr$ULR_CQ )
+
+row_curr_yr <-  slice(tbl_bs1, nrow(tbl_bs1) - 1)
+row_curr_yr_min1 <-  slice(tbl_bs1, nrow(tbl_bs1) - 2)
+prem_curr_yr <- ( row_curr_yr$UP_CQ)
+prem_curr_yr_min1 <- row_curr_yr_min1$UP_CQ
+prem_growth_last_yr <- prem_curr_yr/prem_curr_yr_min1 - 1
+
+
+
+```
+
+```{r ft_fin_res_uwy, include=FALSE}
+lab_total <- str_c("Total (", oldest_uwy, "-", current_uwy, " )")
+lab_uwy_wind <- str_c(oldest_uwy, "-", current_uwy)
+
+tbl_bs1 <- df_wide %>% select(UWY, (ends_with("_CQ"))) %>% 
+  group_by(UWY) %>% 
+  summarise(across(where(is.numeric), sum)) %>% 
+  add_row(
+    UWY = "Total", 
+    df_wide %>%  ungroup() %>% select(UWY, (ends_with("_CQ"))) %>% 
+   summarise(across(where(is.numeric), sum))
+) %>% mutate(
+  ULR_CQ = -UL_CQ / UP_CQ,
+  ACR_CQ = -UAC_CQ / UP_CQ,
+  CLR_CQ = ULR_CQ + ACR_CQ
+  ) %>% relocate(UNP_CQ, .after = UAC_CQ) %>% 
+  relocate(IBNR_CQ, .after = RL_CQ)
+
+
+
+ft_col_names <- colnames(tbl_bs1)
+
+ft_key_col_names <- ft_col_names[!ft_col_names %in% c("UNP_CQ", "PL_CQ", "CR_CQ", "ACR_CQ")]
+
+tbl_bs2 <- tbl_bs1 %>% 
+  mutate(across(UP_CQ:TR_CQ, my_unit_format),  
+  across(ULR_CQ:CLR_CQ, ~.* 100)
+  )  %>% 
+   mutate("place_holder" = 1)
+
+ft_key_col_names <- c(ft_key_col_names, "place_holder")
+
+last_row <- nrow(tbl_bs2)
+color_hd <- "#00a9e0"
+color_font <- "#282828"
+
+align_num <- length(ft_key_col_names)
+
+
+ftbl <- tbl_bs2 %>% 
+  flextable(col_keys = ft_key_col_names)  
+
+ft_uwy <- ftbl %>% flextable::theme_zebra(odd_body = "#eff2f1") %>% 
+ 
+  flextable::fit_to_width(max_width = 24) %>%
+  flextable::width(j = 1:10, width = 5) %>%
+  # dim_pretty(part = "all") %>% returns the dim that will make hte table pretty
+  
+  # background color
+  bg(bg = "white", part = "header") %>% 
+  bg(i = last_row, bg = "white") %>%
+  
+  # text color
+  color(part = "header", color = color_hd) %>% 
+  color(color = color_font) %>% 
+  color(i = last_row, color = color_hd) %>%
+  
+  # other font properties
+  bold(part = "all", bold = F) %>%
+  fontsize(part = "all", size = 9) %>% 
+  flextable::font(fontname = "SwissReSans", part = "all") %>% 
+  
+  # align text
+  align(j = 2:align_num, align = "right", part = "all") %>% 
+  valign(valign = "top", part = "header") %>% 
+  line_spacing(space = 1.2) %>% 
+  
+  hline(i = last_row - 1, border = fp_border(color = color_font, width = 1)) %>% 
+  hline(part = "header", border = fp_border(color = color_font, width = 1))  %>% 
+  
+  
+  # set headers 
+  set_header_labels( 
+    UWY = "UW\nYear", 
+    UNP_CQ = "Net\nPremium",
+    PL_CQ = "Paid\nLosses", 
+    CR_CQ = "Case\nReserves",
+    RL_CQ = "Reported\nLosses",
+    IBNR_CQ = "IBNR", 
+    TR_CQ = "Technical\nResult",
+    UL_CQ = "Ultimate\nLoss",
+    ULR_CQ = "Ultimate\nLoss Ratio",
+    UP_CQ = "Premium", 
+    UAC_CQ = "Acquisition\nCosts",
+    ACR_CQ = "Acquisition\nCost Ratio",
+    CLR_CQ = "Combined\nLoss Ratio",
+    place_holder = "Combined LR\nrange"
+    )     %>% 
+  flextable::highlight(j = "CLR_CQ", i = ~ CLR_CQ > 100) %>% 
+  # flextable::colformat_double(j = 2, ~ . / .00001)
+  flextable::colformat_double(j = c("ULR_CQ", "CLR_CQ"), suffix = "%", digits = 0)  %>% 
+   
+  compose(part = "body", j = 10, value = as_paragraph(linerange(value = CLR_CQ, min = min(CLR_CQ), max = max(CLR_CQ), height = .15))) %>%
+   flextable::width(j = 10, width = 1)
+
+```
+
+```{r flxtblincep2dt}
+set_caption( 
+  ft_uwy, 
+  style = "ft_caption",
+  caption =  "Inception to date Technical Result in USD millions", 
+  autonum = run_autonum(seq_id = "tab", pre_label = "Table ") 
+    )
+
+
+# prepare for inline talking!
+avg_lr <- my_pct_format( slice(tbl_bs1, nrow(tbl_bs1))$ULR_CQ)
+
+avg_clr <- my_pct_format( slice(tbl_bs1, nrow(tbl_bs1))$CLR_CQ)
+
+df_highest_clr <- tbl_bs1 %>% filter(CLR_CQ == max(CLR_CQ))
+
+worst_clr <- my_pct_format(  df_highest_clr$CLR_CQ )
+worst_clr_uwy <- df_highest_clr$UWY 
+worst_clr_lr <- my_pct_format(  df_highest_clr$ULR_CQ )
+
+row_curr_yr <-  slice(tbl_bs1, nrow(tbl_bs1) - 1)
+row_curr_yr_min1 <-  slice(tbl_bs1, nrow(tbl_bs1) - 2)
+prem_curr_yr <- ( row_curr_yr$UP_CQ)
+prem_curr_yr_min1 <- row_curr_yr_min1$UP_CQ
+prem_growth_last_yr <- prem_curr_yr/prem_curr_yr_min1 - 1
+
+```
+
+<div class = "lowrh">
+
+The **`r fn_text("combined loss ratio", color_blue)`** is **`r  fn_text(avg_clr, color_blue)`** for contract years `r oldest_uwy` to `r current_uwy`.
+
+</div>
+
+The average loss ratio is `r avg_lr` for the same period while the worst performing year is `r worst_clr_uwy` with a combined loss ratio of `r worst_clr`.
+
+<!-- The chart below shows the Premium and Ultimate Loss for each underwriting year as well the cumulative technical result represented by the green line/dots. -->
+
+
+**By Region**\
+Results for each of the `r length(unique(df_wide$Land))` regions are as follows:
+
+```{r ft-fin-res-land, include=T, message = F, warning=F}
+
+# i want the bs to look P-C, PL, CS, IBNR, UL, TR, ULR
+lab_total <- str_c("Total (", oldest_uwy, "-", current_uwy, " )")
+lab_total <- "Total"
+
+
+tbl_bs_land1 <- df_wide %>% select(Land, (ends_with("_CQ"))) %>% 
+  group_by(Land) %>% 
+  summarise(across(where(is.numeric), sum)) %>% 
+  add_row(
+    Land = "Total", 
+    df_wide %>%  ungroup() %>% select(UWY, (ends_with("_CQ"))) %>% 
+   summarise(across(where(is.numeric), sum))
+) %>% mutate(
+  ULR_CQ = -UL_CQ / UP_CQ,
+  ACR_CQ = -UAC_CQ / UP_CQ,
+  CLR_CQ = ULR_CQ + ACR_CQ
+  ) %>% relocate(UNP_CQ, .after = UAC_CQ) %>% relocate(IBNR_CQ, .after = RL_CQ)
+
+
+
+tbl_bs_land2 <- tbl_bs_land1 %>% 
+  mutate(hl_flag = if_else(CLR_CQ >= 1, 1, 0)  ) %>% 
+  mutate(across(UP_CQ:TR_CQ, ~number(x = ., big.mark = "'", scale = 1/1e6, accuracy = .1) ) ) %>% 
+  mutate(across(ULR_CQ:CLR_CQ, ~percent(x = ., accuracy = 1) ) ) %>% 
+  select(Land, UP_CQ, UAC_CQ, RL_CQ, IBNR_CQ, UL_CQ, TR_CQ, ULR_CQ, CLR_CQ, hl_flag) %>% 
+    rename(
+      "Region" = Land,
+                             "Premium" = UP_CQ,
+                             "Acquisition Costs" = UAC_CQ,
+                             "Reported Losses" = RL_CQ,
+                            "IBNR" = IBNR_CQ,
+                            "Ultimate Loss" = UL_CQ, 
+                            "Technical Result" = TR_CQ,
+                            "Ultimate Loss Ratio" = ULR_CQ,
+                            "Combined Loss Ratio" = CLR_CQ
+      
+      
+    )
+
+
+tip_TR <- str_wrap("= Premium + (Acquisition Costs) + (Ultimate Loss)", width = 35)
+tip_ULR <- str_wrap("= - (Ultimate Loss) / Premium", width = 35)
+tip_CLR <- "= (Ultimate Loss Ratio) + (-Acquisition Costs) / Premium"
+
+last_row <- nrow(tbl_bs_land2) 
+color_hd <- "#00a9e0"
+color_font <- "#282828"
+
+names(tbl_bs_land2)[7] <- text_spec(names(tbl_bs_land2)[7],format = "html", popover = tip_TR)
+names(tbl_bs_land2)[8] <- text_spec(names(tbl_bs_land2)[8],format = "html", popover = tip_ULR)
+names(tbl_bs_land2)[9] <- text_spec(names(tbl_bs_land2)[9],format = "html", popover = tip_CLR)
+
+kbl_tr_land <- 
+tbl_bs_land2  %>%
+  mutate_at(.vars = 9, .funs = ~ if_else(tbl_bs_land2$hl_flag ==  1, cell_spec(., background = "yellow"), .)) %>% 
+  select(-hl_flag) %>% 
+    
+
+      knitr::kable(format = "html", escape = F,
+              align = "lrrrrrrrr",
+               caption =  "Inception to date Technical Result in USD millions"
+              ) %>%
+  kable_styling(
+    bootstrap_options = c("condensed"),
+    full_width = F,
+    position = "l" #, font_size = 14
+    # stripe_color not available in html!!!
+    ) %>% 
+
+  row_spec(0, color = color_hd, extra_css = str_c("font-weight: normal; vertical-align: top;", "border-bottom: 1px solid",  color_font, ";")) %>%
+
+  row_spec(1:nrow(tbl_bs_land2), color = color_font, extra_css = "border-bottom: hidden;") %>%
+
+  row_spec(seq(1, nrow(tbl_bs_land2), 2) , background = color_bg) %>%
+
+  # row_spec(0, extra_css = "vertical-align: top;") %>%
+  # column_spec(column = 1, width = "10em") %>%
+  # column_spec(column = 2:5, width = "6em") %>%
+  row_spec(row = nrow(tbl_bs_land2) -1, extra_css = "border-bottom: 1px solid #2E2B21;") %>%
+  row_spec(row = nrow(tbl_bs_land2), color = color_hd, background = "white")
+  #
+  #
+
+  # add_header_above( c(" " = 1, "By Reported" = 2, "By Count " = 2), line = F, extra_css = "font-weight: normal;")  
+  # add_footnote(str_wrap("'Technical Result' is the sum of 'Net Premium' with 'Ultimate Loss'", width = 38), notation = "none") 
+
+# show kbl
+kbl_tr_land
+
+
+
+
+
+
+# prepare for inline bla bla bla
+df_best_clr_land <- tbl_bs_land1 %>% filter(CLR_CQ == min(CLR_CQ))
+df_worst_clr_land <- tbl_bs_land1 %>% filter(CLR_CQ == max(CLR_CQ))
+
+best_clr_land_v <- my_pct_format(  df_best_clr_land$CLR_CQ )
+best_clr_land_d <- df_best_clr_land$Land 
+
+best_clr_lr_land <- my_pct_format(  df_best_clr_land$ULR_CQ )
+
+
+worst_clr_land_v <- my_pct_format(  df_worst_clr_land$CLR_CQ )
+worst_clr_land_d <- df_worst_clr_land$Land 
+worst_clr_lr_land <- my_pct_format(  df_worst_clr_land$ULR_CQ )
+
+```
+The best performing region, so far, is `r best_clr_land_d` with a combined loss ratio of `r best_clr_land_v` while the 
+worst is `r worst_clr_land_d` with a combined loss ratio of `r worst_clr_land_v`.
+
+<br>
+
+# Costed Loss Ratios versus Reserved Loss Ratios
+
+In this section we analyize the difference between the reserved (in red) and costed (in dark brown) loss ratios.
+
+**By Underwriting Year**
+
+```{r chunk_p_t0_vs_ulr_uwy, include=F}
+
+df_uwy1 <- df_wide %>% ungroup() %>%
+  select(
+      UWY,
+      UP_CQ, UL_CQ, RL_CQ,
+      UL_T0, UP_T0) %>%
+  group_by(UWY) %>%
+  summarise(UL_CQ = sum(UL_CQ, na.rm = T),
+            UP_CQ = sum(UP_CQ, na.rm = T),
+            UL_T0 = sum(UL_T0, na.rm = T),
+            UP_T0 = sum(UP_T0, na.rm = T)
+            )
+
+v_uwy <- c( df_uwy1$UWY %>% levels())
+str_total_row <- str_c("Total (", v_uwy[1], "-", v_uwy[length(v_uwy)], ")")
+
+df_uwy2 <- 
+  df_uwy1 %>% 
+  srd_add_total_row(
+    var_w_total = UWY, 
+    lab_total = str_total_row, 
+    var_w_total_as_fct = T)
+
+
+
+
+# it went to character removed the factors so we need to bring factors back in
+
+df_uwy3 <- df_uwy2 %>%
+  mutate(
+    ULR_CQ = -UL_CQ / UP_CQ,
+    ULR_T0 = -UL_T0 / UP_T0
+    )
+
+
+
+p_t0_vs_ulr_uwy <- 
+  
+  srp_cleveland(
+    # required 
+      df = df_uwy3,
+      x = UWY, 
+      y1 = ULR_T0, 
+      y2 = ULR_CQ, 
+    
+    # formating y-axis 
+    fmt_num_units_y = 0.01, 
+    fmt_num_suffix_y = "%", 
+    fmt_num_decimals_y = 1,
+    
+    # legend label
+    lab_legend_y1_y2 = c("Priced", 
+                         "Reserved"),
+    # adding header with Premium values
+    dlab_header = UP_CQ,
+    lab_header = "Premium",
+    fmt_num_units_header = "m",
+    fmt_num_decimals_header = 1,
+    spec_header_room_4txt = 0.07, 
+    
+    # display the diff y2-y1
+    dlab_show_diff = TRUE,
+    # special argument highlight the total
+    spec_drawrect_last_x = TRUE,
+    fmt_theme_font_family = "sans"
+    
+  )
+
+
+
+row_avg_t0_vs_ulr <- tail(df_uwy3, n = 1)
+
+avg_t0_lr <- row_avg_t0_vs_ulr$ULR_T0
+avg_ul_lr <- row_avg_t0_vs_ulr$ULR_CQ
+
+avg_t0_vs_ul_lr <- avg_ul_lr - avg_t0_lr
+
+
+adj_t0_vs_res_cuts <- c(-Inf, 0.05, 0.50, Inf) 
+adj_t0_vs_res_lab <- c("only", "", "a whooping") 
+
+adj_t0_vs_res <-  adj_t0_vs_res_lab[findInterval(abs(avg_t0_vs_ul_lr), adj_t0_vs_res_cuts)]
+
+
+```
+
+```{r plot-to-vs-uwy,  fig.dim = c(12, 6), fig.cap='Costed vs Reserved by Underwriting Year'}
+p_t0_vs_ulr_uwy
+```
+
+The average `r fn_text("costed loss ratio", color_blue)` is `r  fn_text(percent(avg_t0_lr, accuracy = .1), color_blue)` compared to the current average reserved of `r fn_text(percent(avg_ul_lr, accuracy = .1), color_blue)`, a difference of `r adj_t0_vs_res`  `r percent(x = avg_t0_vs_ul_lr, accuracy = 0.1)`, for contract years `r oldest_uwy` to `r current_uwy`.
+
+**By Region**\
+The same analysis is performed but sliced by region:
+
+```{r chunk_p_t0_vs_ulr_land,include=F}
+df_land1 <- df_wide %>% ungroup() %>%
+
+  group_by(Land) %>%
+  summarise(UL_CQ = sum(UL_CQ, na.rm = T),
+            UP_CQ = sum(UP_CQ, na.rm = T),
+            UL_T0 = sum(UL_T0, na.rm = T),
+            UP_T0 = sum(UP_T0, na.rm = T)
+  ) %>%
+   arrange(desc(UP_CQ))
+
+
+df_land2 <- df_land1 %>% 
+  srd_add_total_row(var_w_total = Land, 
+  lab_total = str_total_row, 
+  var_w_total_as_fct = T)
+
+# it went to character removed the factors so we need to bring factors back in
+df_land3 <- df_land2 %>%
+  mutate(
+    ULR_CQ = -UL_CQ / UP_CQ,
+    ULR_T0 = -UL_T0 / UP_T0
+  )
+
+
+p_t0_vs_ulr_land <- 
+  
+  srp_cleveland(
+    # required 
+      df = df_land3,
+      x = Land, 
+      y1 = ULR_T0, 
+      y2 = ULR_CQ, 
+    
+    # formating y-axis 
+    fmt_num_units_y = 0.01, 
+    fmt_num_suffix_y = "%", 
+    fmt_num_decimals_y = 1,
+    
+    # legend label
+    lab_legend_y1_y2 = c("Priced", 
+                         "Reserved"),
+    # adding header with Premium values
+    dlab_header = UP_CQ,
+    lab_header = "Premium",
+    fmt_num_units_header = "m",
+    fmt_num_decimals_header = 1,
+    spec_header_room_4txt = 0.07, 
+    
+    # display the diff y2-y1
+    dlab_show_diff = TRUE,
+    # special argument highlight the total
+    spec_drawrect_last_x = TRUE,
+    fmt_theme_font_family = "sans"
+  )
+
+
+p_t0_vs_ulr_land
+```
+
+Figure \@ref(fig:p-t0-vs-ulr-land) below shows the same chart but sliced by region.
+
+  ```{r p-t0-vs-ulr-land,  fig.dim = c(12, 6), fig.cap='Costed vs reserved by region' }
+p_t0_vs_ulr_land
+```
+
+To see the difference between Actual vs Expected by industry please refer to [Appendix A](#App_A).
+
+<br>
+
+# Top `r top_number` list
+
+In this section we show Remarkable Re's top `r top_number` lists by the following criteria:
+
+* **by case reserves** (per loss)
+* **by reported amounts** (per loss)
+* **by written premium** (per insured)
+* **by most profitable insured**
+* **by least profitable insured**
+
+
+## Per individual claim
+
+**By case reserves (per loss)**\
+```{r top-n-cr, message=F, warning=F}
+
+
+# select the variables to display
+var_top5_cr = c("UWY", "Insured", "Land", "CLAIM_ID", "CLAIM_DESC", "Industry", "CR_CQ", "RL_CQ")
+
+df_top_cr <- df_wide %>% select_at(var_top5_cr) %>% top_n(n = top_number, wt = -CR_CQ) %>%
+  mutate(
+         CLAIM_DESC = str_replace_all(CLAIM_DESC, "[-\'\\(\\)\\[\\]0-9!?.!,]", " "),
+         CLAIM_DESC = if_else(
+                                str_count(CLAIM_DESC, fixed(" ")) != 0,
+                                str_c(str_extract(CLAIM_DESC, "(^\\S+.\\S+)"), "***"),
+                                CLAIM_DESC
+                                ),
+         CLAIM_ID = str_c(str_sub(CLAIM_ID, 1, 8), "***")
+         
+  ) %>% 
+  arrange(CR_CQ) %>% 
+  mutate(across(where(is.numeric), scales::number, big.mark = "'"))
+
+
+
+fn_name_tbl_top5_cr <- function(x) {
+  switch(x,
+    "UWY" = "UW Year", 
+    "Insured" = "Insured", 
+    "Land" = "Region", 
+    "CLAIM_ID" = "Claim number", 
+    "CLAIM_DESC" = "Claim description", 
+    "Industry" = "Industry", 
+    "CR_CQ" = "Case Reserve", 
+    "RL_CQ" = "Reported Loss",
+    x
+    
+  )
+}
+
+top_cr_odd_rows <- seq(from = 1, to = nrow(df_top_cr), by = 2)
+
+kbl_top_cr <- df_top_cr %>% 
+    mutate(CR_CQ = cell_spec(CR_CQ, format = "html",color = "black", background = "#f9fce5", bold = F) ) %>%
+knitr::kable(format = "html", escape = F,
+              align = "llllllrr",
+               col.names = c("UW Year",
+                             "Insured",
+                             "Region",
+                             "Claim number",
+                             "Loss description",
+                             "Industry",
+                             "Case Reserves",
+                             "Reported Losses"
+                             ), 
+             caption = "Top Case Reserves per loss"
+                             
+
+             ) %>% 
+  kable_styling(
+    bootstrap_options = c("condensed"), 
+    full_width = T, 
+    position = "l",
+    # stripe_color not available in html!!!
+    ) %>% 
+  row_spec(0, color = color_hd, extra_css = str_c("font-weight: normal; vertical-align: top;", "border-bottom: 1px solid ",  color_font, ";")) %>% 
+  # row_spec(0, color = color_hd, extra_css = str_c("font-weight: normal;")) %>%   
+  row_spec(1:nrow(df_top_cr), color = color_font) %>%   
+  row_spec(top_cr_odd_rows, background = color_bg) %>% 
+  row_spec(0, extra_css = "vertical-align: top;") %>% 
+  # column_spec(column = 6, width = "6cm") %>% 
+  # column_spec(column = 7:8, width = "4cm") %>% 
+  row_spec(nrow(df_top_cr), extra_css =  str_c("border-bottom: 1px solid;",  color_font, ";"))    
+
+# show me
+kbl_top_cr
+
+```
+
+**By reported losses** (per loss)\
+```{r top-n-rl, message=F, warning=F}
+
+
+# select the variables to display
+df_top_rl <- df_wide %>% select_at(var_top5_cr) %>% top_n(n = top_number, wt = -RL_CQ) %>%
+  mutate(
+         CLAIM_DESC = str_replace_all(CLAIM_DESC, "[-\'\\(\\)\\[\\]0-9!?.!,]", " "),
+         CLAIM_DESC = if_else(
+                                str_count(CLAIM_DESC, fixed(" ")) != 0,
+                                str_c(str_extract(CLAIM_DESC, "(^\\S+.\\S+)"), "***"),
+                                CLAIM_DESC
+                                ),
+         CLAIM_ID = str_c(str_sub(CLAIM_ID, 1, 8), "***")
+         
+  ) %>% 
+  arrange(RL_CQ) %>% 
+  mutate(across(where(is.numeric), scales::number, big.mark = "'"))
+
+
+top_lr_odd_rows <- seq(from = 1, to = nrow(df_top_rl), by = 2)
+
+kbl_top_rl <- df_top_rl %>% 
+    mutate(RL_CQ = cell_spec(RL_CQ, format = "html",color = "black", background = "#f9fce5", bold = F) ) %>%
+knitr::kable(format = "html", escape = F,
+              align = "llllllrr",
+               col.names = c("UW Year",
+                             "Insured",
+                             "Region",
+                             "Claim number",
+                             "Loss description",
+                             "Industry",
+                             "Case Reserves",
+                             "Reported Losses"
+                             ), 
+             caption = "Top Reported Losses"
+                             
+
+             ) %>% 
+  kable_styling(
+    bootstrap_options = c("striped","condensed"), 
+    full_width = T, 
+    position = "l", 
+    
+    # stripe_color not available in html!!!
+    ) %>% 
+  row_spec(0, color = color_hd, extra_css = str_c("font-weight: normal; vertical-align: top;", "border-bottom: 1px solid ",  color_font, ";")) %>% 
+  # row_spec(0, color = color_hd, extra_css = str_c("font-weight: normal;")) %>%   
+  row_spec(1:nrow(df_top_rl), color = color_font) %>%   
+  row_spec(top_cr_odd_rows, background = color_bg) %>% 
+  row_spec(0, extra_css = "vertical-align: top;") %>% 
+  # column_spec(column = 6, width = "6cm") %>% 
+  # column_spec(column = 7:8, width = "4cm") %>% 
+  row_spec(nrow(df_top_rl), extra_css =  str_c("border-bottom: 1px solid;",  color_font, ";"))    
+
+# show me
+kbl_top_rl
+
+```
+
+<br>
+
+## Per Insured
+
+**By written premium** (per insured)
+
+```{r txt_top_up, include=FALSE}
+var_top5 = c("UWY", "Insured", "Land", "LoB", "LE", "Industry")
+
+ls_top_up <- df_wide %>% group_by(Insured) %>% 
+            select(Insured, UP_CQ) %>% 
+            summarise(total_up = sum(UP_CQ, na.rm = T)) %>% 
+            top_n(n = top_number, wt = total_up) %>% 
+            arrange(desc(total_up)) %>% 
+            select(Insured) %>% pull()
+    
+
+df_top_up1 <- filter(df_wide, Insured %in% ls_top_up) %>% 
+  select(Insured, Land, LoB, LE, Industry, UWY, UP_CQ, TR_CQ) %>% 
+  group_by(Insured, Land, LoB, LE, Industry) %>% 
+  nest()
+
+
+
+# work with the list, first extract each component: Premium first,
+# sum the stand alonse premium list, apply the same pattern to UWY
+df_top_up2 <- df_top_up1 %>% 
+  mutate(
+    UP_CQ = lapply(data, "[", 2),
+    UP_CQ = map(UP_CQ, sum),
+    
+    TR_CQ = lapply(data, "[", 3),
+    TR_CQ = map(TR_CQ, sum),
+
+    UWY = unique(lapply(data, "[", 1)),
+    UWY = map(UWY, distinct),
+    UWY = map(UWY, unlist),
+    UWY = map(UWY, sort),
+    UWY = map(UWY, str_sub, -2),
+    UWY = map(UWY, paste, collapse = ", ")
+    ) 
+
+
+# remove data column and unnest Premium and UWY
+df_top_up3 <- df_top_up2 %>% 
+              select(-data) %>% 
+              unnest(cols = c(UWY, UP_CQ, TR_CQ)) %>% 
+              arrange(desc(UP_CQ)) %>% 
+              relocate(UWY, .before = UP_CQ) %>% 
+              mutate(across(where(is.numeric), number, big.mark = "'", accuracy = 1, scale = 1 / 1))
+
+
+top_up_odd_rows <- seq(from = 1, to = nrow(df_top_up3), by = 2)
+
+
+
+# turn our attention to create embeded line plots in kable extra for premium and tech. results.
+
+df_kbl_plot_top_up <- df_wide %>% 
+  select(Insured, UWY, UP_CQ, TR_CQ) %>% 
+  filter(Insured %in% df_top_up3$Insured) %>% 
+  group_by(Insured, UWY) %>% 
+  summarise(
+    UP_CQ = sum(UP_CQ, na.rm = TRUE),
+    TR_CQ = sum(TR_CQ, na.rm = TRUE)) %>% 
+  mutate(Insured = factor(x = Insured, levels = df_top_up3$Insured)) %>% 
+  arrange((Insured)) %>% 
+  mutate(
+    txt_up = scales::number(UP_CQ, accuracy = 1, scale = 1/1e3, big.mark = "'", suffix = "k"),
+    txt_tr = scales::number(TR_CQ, accuracy = 1, scale = 1/1e3, big.mark = "'", suffix = "k")
+    )
+
+
+ls_kbl_plot_top_up_up <- base::split(df_kbl_plot_top_up$UP_CQ, df_kbl_plot_top_up$Insured)
+ls_kbl_plot_top_up_tr <- base::split(df_kbl_plot_top_up$TR_CQ, df_kbl_plot_top_up$Insured)
+
+
+
+v_uwy_top_up <- df_top_up3 %>%  pull(UWY) %>% 
+  str_split(., ", ") %>%     
+  map_chr(., ~ .[length(.)]) %>% 
+  as.integer() + 2000
+
+
+df_txt_top_up1 <- bind_cols(df_top_up3, "latest_yr" = v_uwy_top_up)
+
+df_txt_top_up2 <- filter(df_txt_top_up1, as.integer(latest_yr) != as.integer(current_uwy_v))
+
+txt_most_prof_not_renew <- if (nrow(df_txt_top_up2) > 0) {
+  str_c("Note that from this list; ", knitr::combine_words(df_txt_top_up2 %>% pull(Insured)), " were not renewed in ", current_uwy, ".")
+} else {str_c("None of the insureds were renewed in ", current_uwy, ".")}
+
+```
+
+The table below displays the `r top_number` largest  insureds in the book by written premium.\
+`r txt_most_prof_not_renew`
+
+```{r top-up, message=F, warning=F}
+
+# select the variables to display
+var_top5 = c("UWY", "Insured", "Land", "LoB", "LE", "Industry")
+
+ls_top_up <- df_wide %>% group_by(Insured) %>% 
+            select(Insured, UP_CQ) %>% 
+            summarise(total_up = sum(UP_CQ, na.rm = T)) %>% 
+            top_n(n = top_number, wt = total_up) %>% 
+            arrange(desc(total_up)) %>% 
+            select(Insured) %>% pull()
+    
+
+df_top_up1 <- filter(df_wide, Insured %in% ls_top_up) %>% 
+  select(Insured, Land, LoB, LE, Industry, UWY, UP_CQ, TR_CQ) %>% 
+  group_by(Insured, Land, LoB, LE, Industry) %>% 
+  nest()
+
+
+
+# work with the list, first extract each component: Premium first,
+# sum the stand alonse premium list, apply the same pattern to UWY
+df_top_up2 <- df_top_up1 %>% 
+  mutate(
+    UP_CQ = lapply(data, "[", 2),
+    UP_CQ = map(UP_CQ, sum),
+    
+    TR_CQ = lapply(data, "[", 3),
+    TR_CQ = map(TR_CQ, sum),
+
+    UWY = unique(lapply(data, "[", 1)),
+    UWY = map(UWY, distinct),
+    UWY = map(UWY, unlist),
+    UWY = map(UWY, sort),
+    UWY = map(UWY, str_sub, -2),
+    UWY = map(UWY, paste, collapse = ", ")
+    ) 
+
+
+# remove data column and unnest Premium and UWY
+df_top_up3 <- df_top_up2 %>% 
+              select(-data) %>% 
+              unnest(cols = c(UWY, UP_CQ, TR_CQ)) %>% 
+              arrange(desc(UP_CQ)) %>% 
+              relocate(UWY, .before = UP_CQ) %>% 
+              mutate(across(where(is.numeric), number, big.mark = "'", accuracy = 1, scale = 1 / 1))
+
+
+top_up_odd_rows <- seq(from = 1, to = nrow(df_top_up3), by = 2)
+
+
+
+# turn our attention to create embeded line plots in kable extra for premium and tech. results.
+
+df_kbl_plot_top_up <- df_wide %>% 
+  select(Insured, UWY, UP_CQ, TR_CQ) %>% 
+  filter(Insured %in% df_top_up3$Insured) %>% 
+  group_by(Insured, UWY) %>% 
+  summarise(
+    UP_CQ = sum(UP_CQ, na.rm = TRUE),
+    TR_CQ = sum(TR_CQ, na.rm = TRUE)) %>% 
+  mutate(Insured = factor(x = Insured, levels = df_top_up3$Insured)) %>% 
+  arrange((Insured)) %>% 
+  mutate(
+    txt_up = scales::number(UP_CQ, accuracy = 1, scale = 1/1e3, big.mark = "'", suffix = "k"),
+    txt_tr = scales::number(TR_CQ, accuracy = 1, scale = 1/1e3, big.mark = "'", suffix = "k")
+    )
+
+
+ls_kbl_plot_top_up_up <- base::split(df_kbl_plot_top_up$UP_CQ, df_kbl_plot_top_up$Insured)
+ls_kbl_plot_top_up_tr <- base::split(df_kbl_plot_top_up$TR_CQ, df_kbl_plot_top_up$Insured)
+
+
+kbl_top_up <- 
+df_top_up3 %>% 
+      mutate(TR_CQ = if_else(TR_CQ <0 , cell_spec(TR_CQ,  format = "html", color = "#e00034", bold = F ), TR_CQ ) ) %>%
+      mutate(UP_CQ = cell_spec(UP_CQ, format = "html", background = "#f9fce5", bold = F) ) %>%
+  
+knitr::kable(format = "html", escape = F,
+              align = "llllllrr",
+               col.names = c("Insured",
+                             "Region",
+                             "Line of Business",
+                             "Legal Entity",
+                             "Industry",
+                             "Underwriting Years",
+                             "Written\nPremium",
+                             "Technical\nResult"
+                             ), 
+             caption = "Top Written Premium"
+
+             ) %>% 
+  kable_styling(
+    bootstrap_options = c("striped","condensed"), 
+    full_width = F, 
+    position = "l", 
+    font_size = 14
+    # stripe_color not available in html!!!
+    ) %>% 
+  row_spec(0, color = color_hd, extra_css = str_c("font-weight: normal; vertical-align: top;", "border-bottom: 1px solid ",  color_font, ";")) %>%   
+  row_spec(1:nrow(df_top_up3), color = color_font) %>%   
+  row_spec(top_up_odd_rows, background = color_bg) %>% 
+  column_spec(7, image = spec_plot(ls_kbl_plot_top_up_up, same_lim = FALSE, polymin = 5)) %>% 
+  column_spec(8, image = spec_plot(ls_kbl_plot_top_up_tr, same_lim = FALSE, polymin = 5))
+
+# show me
+kbl_top_up
+
+
+```
+
+
+**By most profitable insured**\
+```{r top-tr, message=F, warning=F}
+
+# select the variables to display
+var_top5 = c("UWY", "Insured", "Land", "LoB", "LE", "Industry")
+
+ls_top_tr <- df_wide %>% group_by(Insured) %>% 
+            select(Insured, TR_CQ) %>% 
+            summarise(total_tr = sum(TR_CQ, na.rm = T)) %>% 
+            top_n(n = top_number, wt = total_tr) %>% 
+            arrange(desc(total_tr)) %>% 
+            select(Insured) %>% pull()
+    
+df_top_tr1 <- filter(df_wide, Insured %in% ls_top_tr) %>% 
+  select(Insured, Land, LoB, LE, Industry, UWY, UP_CQ, TR_CQ) %>% 
+  group_by(Insured, Land, LoB, LE, Industry) %>% 
+  nest()
+
+
+# work with the list, first extract each component: Premium first,
+# sum the stand alonse premium list, apply the same pattern to UWY
+df_top_tr2 <- df_top_tr1 %>% 
+  mutate(
+    UP_CQ = lapply(data, "[", 2),
+    UP_CQ = map(UP_CQ, sum),
+    
+    TR_CQ = lapply(data, "[", 3),
+    TR_CQ = map(TR_CQ, sum),
+
+    UWY = unique(lapply(data, "[", 1)),
+    UWY = map(UWY, distinct),
+    UWY = map(UWY, unlist),
+    UWY = map(UWY, sort),
+    UWY = map(UWY, str_sub, -2),
+    UWY = map(UWY, paste, collapse = ", ")
+    )
+
+# remove data column and unnest Premium and UWY
+df_top_tr3 <- df_top_tr2 %>% 
+              select(-data) %>% 
+              unnest(cols = c(UWY, UP_CQ, TR_CQ)) %>% 
+              arrange(desc(TR_CQ)) %>% 
+              relocate(UWY, .before = UP_CQ) %>%
+              mutate(across(where(is.numeric), number, big.mark = "'", accuracy = 1, scale = 1 / 1))
+
+
+
+# create embeded plots in kable extra
+df_kbl_plot_top_tr <- df_wide %>% 
+  select(Insured, UWY, UP_CQ, TR_CQ) %>% 
+  filter(Insured %in% df_top_tr3$Insured) %>% 
+  group_by(Insured, UWY) %>% 
+  summarise(
+    UP_CQ = sum(UP_CQ, na.rm = TRUE),
+    TR_CQ = sum(TR_CQ, na.rm = TRUE)) %>% 
+  mutate(Insured = factor(x = Insured, levels = df_top_tr3$Insured)) %>% 
+  arrange((Insured)) %>% 
+  mutate(
+    txt_up = scales::number(UP_CQ, accuracy = 1, scale = 1/1e3, big.mark = "'", suffix = "k"),
+    txt_tr = scales::number(TR_CQ, accuracy = 1, scale = 1/1e3, big.mark = "'", suffix = "k")
+    )
+
+
+ls_kbl_plot_top_tr_up <- base::split(df_kbl_plot_top_tr$UP_CQ, df_kbl_plot_top_tr$Insured)
+ls_kbl_plot_top_tr_tr <- base::split(df_kbl_plot_top_tr$TR_CQ, df_kbl_plot_top_tr$Insured)
+
+
+top_up_odd_rows <- seq(from = 1, to = nrow(df_top_tr3), by = 2)
+
+kbl_top_tr <- 
+df_top_tr3 %>%
+      mutate(TR_CQ = if_else(TR_CQ <0 , cell_spec(TR_CQ,  format = "html", color = "#e00034", bold = F ), TR_CQ ) ) %>%
+      mutate(TR_CQ = cell_spec(TR_CQ, format = "html", background = "#f9fce5", bold = F) ) %>%
+  
+knitr::kable(format = "html", escape = F,
+              align = "llllllrr",
+               col.names = c("Insured",
+                             "Region",
+                             "Line of Business",
+                             "Legal Entity",
+                             "Industry",
+                             "Underwriting Years",
+                             "Written\nPremium",
+                             "Technical\nResult"
+                             ), 
+             caption = "Most profitable accounts"
+
+             ) %>% 
+  kable_styling(
+    bootstrap_options = c("striped","condensed"), 
+    full_width = F, 
+    position = "l", 
+    font_size = 14
+    # stripe_color not available in html!!!
+    ) %>% 
+  row_spec(0, color = color_hd, extra_css = str_c("font-weight: normal; vertical-align: top;", "border-bottom: 1px solid ",  color_font, ";")) %>%   
+  row_spec(1:nrow(df_top_tr3), color = color_font) %>%   
+  row_spec(top_up_odd_rows, background = color_bg) %>% 
+  # add_header_above(header = c(" " = 6, "USD millions" = 2), extra_css = "font-weight: normal; vertical-align: bottom;") 
+  column_spec(7, image = spec_plot(ls_kbl_plot_top_tr_up, same_lim = FALSE, polymin = 5)) %>% 
+  column_spec(8, image = spec_plot(ls_kbl_plot_top_tr_tr, same_lim = FALSE, polymin = 5))
+
+# show me!
+kbl_top_tr
+
+```
+
+```{r txt_aux_most_prof, include=FALSE}
+v_uwy_top_tr <- df_top_tr3 %>%  pull(UWY) %>% 
+  str_split(., ", ") %>%     
+  map_chr(., ~ .[length(.)]) %>% 
+  as.integer() + 2000
+
+
+df_txt_most_prof1 <- bind_cols(df_top_tr3, "latest_yr" = v_uwy_top_tr)
+
+df_txt_most_prof2 <- filter(df_txt_most_prof1, as.integer(latest_yr) != as.integer(current_uwy_v))
+
+txt_most_prof_not_renew <- if (nrow(df_txt_most_prof2) > 0) {
+  str_c("Note that from this list; ", knitr::combine_words(df_txt_most_prof2 %>% pull(Insured)), " were not renewed in ", current_uwy, ".")
+} else {str_c("None of the insureds were renewed in ", current_uwy, ".")}
+
+```
+
+The table above displays the most profitable insureds to date. `r txt_most_prof_not_renew`
+
+**By least profitable insured**
+
+```{r bottom-tr, message=F, warning=F}
+# select the variables to display
+var_top5 = c("UWY", "Insured", "Land", "LoB", "LE", "Industry")
+
+ls_bottom_tr <- df_wide %>% group_by(Insured) %>% 
+            select(Insured, TR_CQ) %>% 
+            summarise(total_tr = sum(TR_CQ, na.rm = T)) %>% 
+            top_n(n = top_number, wt = -total_tr) %>% 
+            arrange(desc(total_tr)) %>% 
+            select(Insured) %>% pull()
+    
+df_bottom_tr1 <- filter(df_wide, Insured %in% ls_bottom_tr) %>% 
+  select(Insured, Land, LoB, LE, Industry, UWY, UP_CQ, TR_CQ, CLAIM_ID, POL_ID) %>% 
+  group_by(Insured, Land, LoB, LE, Industry) %>% 
+  nest()
+
+
+
+# work with the list, first extract each component: Premium first,
+# sum the stand alonse premium list, apply the same pattern to UWY
+df_bottom_tr2 <- df_bottom_tr1 %>% 
+  mutate(
+    UP_CQ = lapply(data, "[", 2),
+    UP_CQ = map(UP_CQ, sum),
+    
+    TR_CQ = lapply(data, "[", 3),
+    TR_CQ = map(TR_CQ, sum),
+
+    UWY = unique(lapply(data, "[", 1)),
+    UWY = map(UWY, distinct),
+    UWY = map(UWY, unlist),
+    UWY = map(UWY, sort),
+    UWY = map(UWY, str_sub, -2),
+    UWY = map(UWY, paste, collapse = ", "),
+    
+    
+    clm = lapply(data, "[", 4),
+    clm = map(clm, ~n_distinct(., na.rm = T)),
+    pol = lapply(data, "[", 5),
+    pol = map(pol, ~n_distinct(., na.rm = T))
+
+    )
+
+# remove data column and unnest Premium and UWY
+df_bottom_tr3 <- df_bottom_tr2 %>% 
+              select(-data) %>% 
+              unnest(cols = c(UWY, UP_CQ, TR_CQ, clm, pol)) %>% 
+              mutate(clm_rt = str_c(clm, "/", pol )) %>% 
+              select(-clm, -pol) %>% 
+              arrange((TR_CQ)) %>% 
+              relocate(UWY, clm_rt, .before = UP_CQ) %>%
+              mutate(across(where(is.numeric), number, big.mark = "'", accuracy = 1, scale = 1 / 1))
+
+
+
+# create embeded plots in kable extra
+df_kbl_plot_bottom_tr <- df_wide %>% 
+  select(Insured, UWY, UP_CQ, TR_CQ) %>% 
+  filter(Insured %in% df_bottom_tr3$Insured) %>% 
+  group_by(Insured, UWY) %>% 
+  summarise(
+    UP_CQ = sum(UP_CQ, na.rm = TRUE),
+    TR_CQ = sum(TR_CQ, na.rm = TRUE)) %>% 
+  mutate(Insured = factor(x = Insured, levels = df_bottom_tr3$Insured)) %>% 
+  arrange((Insured)) %>% 
+  mutate(
+    txt_up = scales::number(UP_CQ, accuracy = 1, scale = 1/1e3, big.mark = "'", suffix = "k"),
+    txt_tr = scales::number(TR_CQ, accuracy = 1, scale = 1/1e3, big.mark = "'", suffix = "k")
+    )
+
+
+ls_kbl_plot_bottom_tr_up <- base::split(df_kbl_plot_bottom_tr$UP_CQ, df_kbl_plot_bottom_tr$Insured)
+ls_kbl_plot_bottom_tr_tr <- base::split(df_kbl_plot_bottom_tr$TR_CQ, df_kbl_plot_bottom_tr$Insured)
+
+
+bottom_tr_odd_rows <- seq(from = 1, to = nrow(df_bottom_tr3), by = 2)
+
+kbl_bottom_tr <- 
+df_bottom_tr3 %>%
+      mutate(TR_CQ = if_else(TR_CQ <0 , cell_spec(TR_CQ,  format = "html", color = "#e00034", bold = F, background = "#f9fce5" ), cell_spec(TR_CQ,  format = "html", bold = F, background = "#f9fce5" ) ) ) %>%
+      
+  
+knitr::kable(format = "html", escape = F,
+              align = "lllllllrr",
+               col.names = c("Insured",
+                             "Region",
+                             "Line of Business",
+                             "Legal Entity",
+                             "Industry",
+                             "Underwriting Years",
+                             "Claim Ratio",
+                             "Written\nPremium",
+                             "Technical\nResult"
+                             ), 
+             caption = "Least profitable accounts"
+
+             ) %>% 
+  kable_styling(
+    bootstrap_options = c("striped","condensed"), 
+    full_width = F, 
+    position = "l", 
+    
+    # stripe_color not available in html!!!
+    ) %>% 
+  row_spec(0, color = color_hd, extra_css = str_c("font-weight: normal; vertical-align: top;", "border-bottom: 1px solid ",  color_font, ";")) %>%   
+  row_spec(1:nrow(df_bottom_tr3), color = color_font) %>%   
+  row_spec(bottom_tr_odd_rows, background = color_bg) %>% 
+  column_spec(8, image = spec_plot(ls_kbl_plot_bottom_tr_up, same_lim = FALSE, polymin = 5)) %>% 
+  column_spec(9, image = spec_plot(ls_kbl_plot_bottom_tr_tr, same_lim = FALSE, polymin = 5))
+
+# show me 
+kbl_bottom_tr
+
+```
+
+```{r txt_least_prof, include=FALSE}
+txt_least_profit_name <- (df_bottom_tr3 %>% pull(Insured))[1]
+txt_least_profit_tr <- (df_bottom_tr3 %>% pull(TR_CQ))[1]
+
+txt_least_profit_latest_uwy1 <- (df_bottom_tr3 %>%
+  pull(UWY))[1] %>% 
+  str_split_fixed(n = Inf, pattern = fixed (", ")) 
+  
+txt_least_profit_latest_uwy2 <-   as.character(
+                                      as.integer(
+                                        txt_least_profit_latest_uwy1[length(txt_least_profit_latest_uwy1)]) + 
+                                        2000)
+
+v_insureds_least_prof <- df_bottom_tr3 %>% pull(Insured)
+
+df_worst_ins_renew <- df_wide %>% 
+  filter(Insured %in% v_insureds_least_prof) %>% 
+  group_by(Insured, UWY) %>% 
+  summarise(UP = sum(UP_CQ)) %>% 
+  mutate(UWY = as.character(UWY)) %>% 
+  filter(UWY == current_uwy ) %>% 
+  mutate(Insured = factor(Insured, levels = v_insureds_least_prof)) %>% 
+  arrange(Insured)
+
+txt_bad_renewals <- if (nrow(df_worst_ins_renew) > 0) {
+  str_c("From the 5 least profitable insureds; ",
+    
+    knitr::combine_words( pull(df_worst_ins_renew, Insured) ), 
+        " were still renewed in ", current_uwy, ".")
+} else {""}
+
+
+```
+
+The least profitable insured is `r txt_least_profit_name` with a technical result of USD `r txt_least_profit_tr`. `r txt_bad_renewals`
+
+<br>
+
+# Further claims insights
+
+## Quarterly movementy by `r renderText(input$sel_toa)`
+
+
+```{r select-toa}
+fluidRow(
+  column(6,
+
+selectInput(inputId = "sel_toa", 
+            label = "Select type of amount", 
+            choices = list("Paid Losses", 
+                           "Case Reserves", 
+                           "Reported Losses", 
+                           "IBNR", 
+                           "Ultimate Loss"),
+            selected = "Case Reserves"
+            )),
+
+column(6, 
+  shinyWidgets::radioGroupButtons(
+   inputId = "color_by",
+   label = "Color by:",
+   choices = c("Underwriting Year" = "uwy_agg", "Region" = "Land"),
+   individual = TRUE,
+   checkIcon = list(
+      yes = tags$i(class = "fa fa-circle", 
+      style = "color: steelblue"),
+      no = tags$i(class = "fa fa-circle-o", 
+         style = "color: steelblue"))
+  )
+  
+), mainPanel() )
+```
+
+
+The next charts display the quarterly loss movements. A single dot represents an individual claim. The x-axis refers to the previous quarter while the y-axis the current quarter. 
+
+Any loss/dot above (below) the identity line represents an increase (decrease) in its value. Any dot on the identity line has experienced no movements during the quarter. The size of the dot represents the amount of the Written Premium of that policy.
+
+
+```{r p_mov_opt, include=FALSE, eval=FALSE}
+
+
+xy_num_grp <- 4
+
+xy_color_by <- "uwy_agg"
+xy_dot_size <- c(3, 8)
+
+xy_leg_dot_size <- 4
+str_to_grp_uwy <- str_c(oldest_uwy,"-", (current_uwy_v - xy_num_grp), collapse = T)
+
+
+xy_palette <- c("#2E2B21", "#E00034", "#F2B401", "#0F4DBC", "#007934") 
+
+xy_sel_toa <- c("RL_CQ", "RL_LQ")
+xytoa_CQ <- xy_sel_toa[1]
+xy_toa_LQ <- xy_sel_toa[2]
+
+xy_lab_plot <- "Reported Losses"
+
+cq_val_qrt <- quarter_title 
+cq_val_yr <- valuation_year
+
+lq_val_qrt <- switch(cq_val_qrt,
+                        "Q1" = "Q4",
+                        "Q2" = "Q1",
+                        "Q3" = "Q2",
+                        "Q4" = "Q3"
+                        )
+
+lq_val_yr <- switch(as.character(valuation_month),
+                        "3" = valuation_year - 1,
+                        "6" = valuation_year,
+                        "9" = valuation_year,
+                        "12" = valuation_year
+                        )
+
+sCQ <- str_c("Amount at ", cq_val_qrt, "/", str_sub(cq_val_yr, -2))
+sLQ <- str_c("Amount at ", lq_val_qrt, "/", str_sub(lq_val_yr, -2))
+
+
+df_xy_mov_lr <-  df_wide %>%  
+  group_by(Land, UWY, Insured, Industry, POL_ID, CLAIM_ID, CLAIM_DESC) %>% 
+    # rename so we do not need evaluation rules
+  rename (
+    toa_CQ = .data[[xytoa_CQ]],
+    toa_LQ = .data[[xy_toa_LQ]]
+  ) %>% 
+  summarise(
+    toa_CQ = -sum(toa_CQ, na.rm = T),
+    toa_LQ = -sum(toa_LQ, na.rm = T),
+     UP_CQ = sum(UP_CQ, na.rm = T)
+  ) %>% 
+  filter(!is.na(CLAIM_ID))  %>% 
+
+  mutate(uwy_agg = as.factor(UWY),
+         uwy_agg = fct_collapse(UWY, !!str_to_grp_uwy := as.character( ( current_uwy_v - xy_num_grp ):oldest_uwy_v )),
+         mov = toa_CQ - toa_LQ,
+         mov_type = case_when(
+                        mov > 0 ~ "Worsening of",
+                        mov < 0 ~ "Improvement of",
+                        TRUE ~ "Neutral movement of"
+           
+          ),
+         mov_abs = abs(mov),
+
+       # for plotly only
+        CQ_txt = str_c(sCQ, scales::number(toa_CQ,": ", big.mark = "'", scale = 1/1000, suffix = "k", accuracy = 1)),
+        LQ_txt = str_c(sLQ, scales::number(toa_LQ,": ", big.mark = "'", scale = 1/1000, suffix = "k", accuracy = 1)),
+        mov_txt = str_c(mov_type, ": ", scales::number(mov, big.mark = "'", scale = 1 / 1e3, suffix = "k", accuracy = 1)),
+        uwy_txt = str_c("UWY: ", UWY), 
+        land_txt = str_c("Region: ", Land),
+        insured_txt = str_c("Insured: ", Insured),
+        claim_txt = str_c("Claim: ", CLAIM_DESC),
+        claim_txt = stringr::word(string = CLAIM_DESC, start = 1, end = 3),
+        claim_txt = if_else(is.na(claim_txt), CLAIM_DESC, claim_txt),
+        claim_txt = str_c("Summary: ", claim_txt, "***request access rights to see full description***"),
+        
+        pol_id_txt = str_c("Policy ID: ", str_sub(POL_ID, start = 1, 7), "**restricted**"),
+        claim_id_txt = str_c("Claim ID: ", str_sub(CLAIM_ID, start = 1, 9), "**restricted**"),
+        
+        plotly_txt = str_c(CQ_txt, LQ_txt, mov_txt, uwy_txt, land_txt, insured_txt, pol_id_txt, claim_id_txt, claim_txt, sep = "\n") #this is only for html
+       # plotly_txt = "" #make pltoly empty for word
+
+    ) %>% ungroup %>%  group_by(POL_ID) %>%      
+  mutate(UP_CQ = max(UP_CQ))
+
+
+
+```
+
+
+```{r chunk-p-mov-lr, include=FALSE}
+oldest_uwy_v <- as.integer(oldest_uwy)
+current_uwy_v <- as.integer(current_uwy)
+xy_num_grp <- 4
+
+xy_color_by <- "uwy_agg"
+xy_dot_size <- c(3, 8)
+
+xy_leg_dot_size <- 4
+str_to_grp_uwy <- str_c(oldest_uwy,"-", (current_uwy_v - xy_num_grp), collapse = T)
+
+
+xy_palette <- c("#2E2B21", "#E00034", "#F2B401", "#0F4DBC", "#007934") 
+
+
+xy_sel_toa <- c("RL_CQ", "RL_LQ")
+xytoa_CQ <- xy_sel_toa[1]
+xy_toa_LQ <- xy_sel_toa[2]
+
+xy_lab_plot <- "Reported Losses"
+
+cq_val_qrt <- quarter_title 
+cq_val_yr <- valuation_year
+
+lq_val_qrt <- switch(cq_val_qrt,
+                        "Q1" = "Q4",
+                        "Q2" = "Q1",
+                        "Q3" = "Q2",
+                        "Q4" = "Q3"
+                        )
+
+lq_val_yr <- switch(as.character(valuation_month),
+                        "3" = valuation_year - 1,
+                        "6" = valuation_year,
+                        "9" = valuation_year,
+                        "12" = valuation_year
+                        )
+
+sCQ <- str_c("Amount at ", cq_val_qrt, "/", str_sub(cq_val_yr, -2))
+sLQ <- str_c("Amount at ", lq_val_qrt, "/", str_sub(lq_val_yr, -2))
+
+
+df_xy_mov_lr <-  df_wide %>%  
+  group_by(Land, UWY, Insured, Industry, POL_ID, CLAIM_ID, CLAIM_DESC) %>% 
+    # rename so we do not need evaluation rules
+  rename (
+    toa_CQ = .data[[xytoa_CQ]],
+    toa_LQ = .data[[xy_toa_LQ]]
+  ) %>% 
+  summarise(
+    toa_CQ = -sum(toa_CQ, na.rm = T),
+    toa_LQ = -sum(toa_LQ, na.rm = T),
+     UP_CQ = sum(UP_CQ, na.rm = T)
+  ) %>% 
+  filter(!is.na(CLAIM_ID))  %>% 
+
+  mutate(uwy_agg = as.factor(UWY),
+         uwy_agg = fct_collapse(UWY, !!str_to_grp_uwy := as.character( ( current_uwy_v - xy_num_grp ):oldest_uwy_v )),
+         mov = toa_CQ - toa_LQ,
+         mov_type = case_when(
+                        mov > 0 ~ "Worsening of",
+                        mov < 0 ~ "Improvement of",
+                        TRUE ~ "Neutral movement of"
+           
+          ),
+         mov_abs = abs(mov),
+
+       # define custom tooltip message
+        CQ_txt = str_c(sCQ, scales::number(toa_CQ,": ", big.mark = "'", scale = 1/1000, suffix = "k", accuracy = 1)),
+        LQ_txt = str_c(sLQ, scales::number(toa_LQ,": ", big.mark = "'", scale = 1/1000, suffix = "k", accuracy = 1)),
+        mov_txt = str_c(mov_type, ": ", scales::number(mov, big.mark = "'", scale = 1 / 1e3, suffix = "k", accuracy = 1)),
+        uwy_txt = str_c("UWY: ", UWY), 
+        land_txt = str_c("Region: ", Land),
+        insured_txt = str_c("Insured: ", Insured),
+        claim_txt = str_c("Claim: ", CLAIM_DESC),
+        claim_txt = if_else(is.na(claim_txt), CLAIM_DESC, claim_txt),
+        claim_txt = str_c("Summary: ", "***request access rights to see description***"),
+        # hide confidential data
+        pol_id_txt = str_c("Policy ID: ", "POL_", "**restricted**"),
+        claim_id_txt = str_c("Claim ID: ", "CLAIM_", "**restricted**"),
+        
+        txt_tip = str_c(CQ_txt, LQ_txt, mov_txt, uwy_txt, land_txt, insured_txt, pol_id_txt, claim_id_txt, claim_txt, sep = "\n") #this is only for html
+      
+    ) %>% ungroup %>%  group_by(POL_ID) %>%      
+  mutate(UP_CQ = max(UP_CQ))
+
+df_xy_mov_lr
+
+```
+
+
+```{r chunk_p-mov-cr, include=F}
+
+xy_sel_toa <- c("CR_CQ", "CR_LQ")
+xytoa_CQ <- xy_sel_toa[1]
+xy_toa_LQ <- xy_sel_toa[2]
+
+xy_lab_plot <- "Reported Losses"
+
+cq_val_qrt <- quarter_title 
+cq_val_yr <- valuation_year
+
+lq_val_qrt <- switch(cq_val_qrt,
+                        "Q1" = "Q4",
+                        "Q2" = "Q1",
+                        "Q3" = "Q2",
+                        "Q4" = "Q3"
+                        )
+
+lq_val_yr <- switch(as.character(valuation_month),
+                        "3" = valuation_year - 1,
+                        "6" = valuation_year,
+                        "9" = valuation_year,
+                        "12" = valuation_year
+                        )
+
+sCQ <- str_c("Amount at ", cq_val_qrt, "/", str_sub(cq_val_yr, -2))
+sLQ <- str_c("Amount at ", lq_val_qrt, "/", str_sub(lq_val_yr, -2))
+
+
+df_xy_mov_cr <-  df_wide %>%  
+  group_by(Land, UWY, Insured, Industry, POL_ID, CLAIM_ID, CLAIM_DESC) %>% 
+    # rename so we do not need evaluation rules
+  rename (
+    toa_CQ = .data[[xytoa_CQ]],
+    toa_LQ = .data[[xy_toa_LQ]]
+  ) %>% 
+  summarise(
+    toa_CQ = -sum(toa_CQ, na.rm = T),
+    toa_LQ = -sum(toa_LQ, na.rm = T),
+     UP_CQ = sum(UP_CQ, na.rm = T)
+  ) %>% 
+  filter(!is.na(CLAIM_ID))  %>% 
+
+  mutate(uwy_agg = as.factor(UWY),
+         uwy_agg = fct_collapse(UWY, !!str_to_grp_uwy := as.character( ( current_uwy_v - xy_num_grp ):oldest_uwy_v )),
+         mov = toa_CQ - toa_LQ,
+         mov_type = case_when(
+                        mov > 0 ~ "Worsening of",
+                        mov < 0 ~ "Improvement of",
+                        TRUE ~ "Neutral movement of"
+           
+          ),
+         mov_abs = abs(mov),
+
+       # for plotly only
+        CQ_txt = str_c(sCQ, scales::number(toa_CQ,": ", big.mark = "'", scale = 1/1000, suffix = "k", accuracy = 1)),
+        LQ_txt = str_c(sLQ, scales::number(toa_LQ,": ", big.mark = "'", scale = 1/1000, suffix = "k", accuracy = 1)),
+        mov_txt = str_c(mov_type, ": ", scales::number(mov, big.mark = "'", scale = 1 / 1e3, suffix = "k", accuracy = 1)),
+       uwy_txt = str_c("UWY: ", UWY), 
+       land_txt = str_c("Region: ", Land),
+        insured_txt = str_c("Insured: ", Insured),
+        
+       claim_txt = str_c("Claim: ", CLAIM_DESC),
+        claim_txt = stringr::word(string = CLAIM_DESC, start = 1, end = 3),
+        claim_txt = if_else(is.na(claim_txt), CLAIM_DESC, claim_txt),
+        # claim_txt = str_c("Summary: ", claim_txt, "***request access rights to see description***"),
+        claim_txt = str_c("Summary: ", "oops_", "***request access rights to see description***"),
+        # pol_id_txt = str_c("Policy ID: ", str_sub(POL_ID, start = 1, 7), "**restricted**"),
+        pol_id_txt = str_c("Policy ID: ", "POL_", "**restricted**"),
+        claim_id_txt = str_c("Claim ID: ", "CLAIM_", "**restricted**"),
+        
+       txt_tip = str_c(CQ_txt, LQ_txt, mov_txt, uwy_txt, land_txt, insured_txt, pol_id_txt, claim_id_txt, claim_txt, sep = "\n") #this is only for html 
+       # txt_tip = str_c(CQ_txt, LQ_txt, mov_txt, uwy_txt, land_txt, insured_txt, claim_txt, sep = "\n") #this is only for html
+       # plotly_txt = "" #make pltoly empty for word
+
+    ) %>% ungroup %>%  group_by(POL_ID) %>%      
+  mutate(UP_CQ = max(UP_CQ))
+
+df_xy_mov_cr
+
+```
+
+
+```{r plty-shiny-mov-lr, message=F}
+
+renderPlotly( {
+
+if (input$color_by != "Land") {
+  my_pal <- (c("#2E2B21", "#E00034", "#F2B401", "#0F4DBC", "#007934"))
+  title_legend <- "Underwriting\nYear"
+  
+  } else {
+  my_pal <- rev(c("#627d77", "#2E2B21", "#E00034", "#F2B401", "#0F4DBC", "#007934"))
+  title_legend <- "Region"
+  }
+
+  
+    if (input$sel_toa == "Case Reserves") {
+      toa_base <- c("CR_CQ", "CR_LQ")
+      } else if (input$sel_toa == "Reported Losses") {
+        toa_base <- c("RL_CQ", "RL_LQ")
+    } else if (input$sel_toa == "IBNR") {
+         toa_base <- c("IBNR_CQ", "IBNR_LQ")
+    } else if (input$sel_toa == "Paid Losses") {
+         toa_base <- c("PL_CQ", "PL_LQ")
+    } else {toa_base <- c("UL_CQ", "UL_LQ")} 
+      
+  
+                
+xytoa_CQ <- toa_base[1]
+xy_toa_LQ <- toa_base[2]
+
+cq_val_qrt <- quarter_title
+cq_val_yr <- valuation_year
+
+lq_val_qrt <- switch(cq_val_qrt,
+                        "Q1" = "Q4",
+                        "Q2" = "Q1",
+                        "Q3" = "Q2",
+                        "Q4" = "Q3"
+                        )
+
+lq_val_yr <- switch(as.character(valuation_month),
+                        "3" = valuation_year - 1,
+                        "6" = valuation_year,
+                        "9" = valuation_year,
+                        "12" = valuation_year
+                        )
+
+sCQ <- str_c("Amount at ", cq_val_qrt, "/", str_sub(cq_val_yr, -2))
+sLQ <- str_c("Amount at ", lq_val_qrt, "/", str_sub(lq_val_yr, -2))
+
+
+df_xy_mov <-  df_wide %>%
+  group_by(Land, UWY, Insured, Industry, POL_ID, CLAIM_ID, CLAIM_DESC) %>%
+    # rename so we do not need evaluation rules
+  rename (
+    toa_CQ = .data[[xytoa_CQ]],
+    toa_LQ = .data[[xy_toa_LQ]]
+  ) %>%
+  summarise(
+    toa_CQ = -sum(toa_CQ, na.rm = T),
+    toa_LQ = -sum(toa_LQ, na.rm = T),
+    UP_CQ = sum(UP_CQ, na.rm = T)
+    
+  ) %>%
+  {if ( xytoa_CQ %in% c("RL_CQ", "CR_CQ") ) filter(. , !is.na( CLAIM_ID ) )  else .} %>%
+  
+  # filter(!is.na(CLAIM_ID))  %>%
+
+  mutate(uwy_agg = as.factor(UWY),
+         uwy_agg = fct_collapse(UWY, !!str_to_grp_uwy := as.character( ( current_uwy_v - xy_num_grp ):oldest_uwy_v )),
+         mov = toa_CQ - toa_LQ,
+         mov_type = case_when(
+                        mov > 0 ~ "Worsening of",
+                        mov < 0 ~ "Improvement of",
+                        TRUE ~ "Neutral movement of"
+
+          ),
+         mov_abs = abs(mov),
+
+       # for plotly only
+         CQ_txt = str_c(sCQ, scales::number(toa_CQ,": ", big.mark = "'", scale = 1/1000, suffix = "k", accuracy = 1)),
+        LQ_txt = str_c(sLQ, scales::number(toa_LQ,": ", big.mark = "'", scale = 1/1000, suffix = "k", accuracy = 1)),
+        mov_txt = str_c(mov_type, ": ", scales::number(mov, big.mark = "'", scale = 1 / 1e3, suffix = "k", accuracy = 1)),
+       uwy_txt = str_c("UWY: ", UWY), 
+       land_txt = str_c("Region: ", Land),
+        insured_txt = str_c("Insured: ", Insured),
+        
+       claim_txt = str_c("Claim: ", CLAIM_DESC),
+        claim_txt = stringr::word(string = CLAIM_DESC, start = 1, end = 3),
+        claim_txt = if_else(is.na(claim_txt), CLAIM_DESC, claim_txt),
+        
+        claim_txt = str_c("Summary: ", "***request access rights to see description***"),
+        
+        pol_id_txt = str_c("Policy ID: ", "POL_", "**restricted**"),
+        claim_id_txt = str_c("Claim ID: ", "CLAIM_", "**restricted**"),
+        
+       txt_tip = str_c(CQ_txt, LQ_txt, mov_txt, uwy_txt, land_txt, insured_txt, pol_id_txt, claim_id_txt, claim_txt, sep = "\n") #this is only for html 
+      
+       
+    ) %>% ungroup %>%  
+          group_by(POL_ID) %>%
+          mutate(UP_CQ = max(UP_CQ)) %>% 
+          filter(toa_CQ > 0, toa_LQ > 0) #no negative values
+
+p_mov_lr <-  ggplot(df_xy_mov, aes(x = toa_LQ, y = toa_CQ, text = txt_tip)) +
+      geom_point(aes(color = !!sym(input$color_by), size = UP_CQ)) +
+      scale_size_continuous(range = xy_dot_size) +
+
+      # scale_alpha(range = c(1, 1)) +
+      scale_color_manual(values = my_pal ) +
+
+      geom_abline(slope = 1, alpha = 0.8, linetype = "solid", color = "black") +
+      scale_x_continuous(name = str_c("as at ", date_full_lq), labels = number_format(big.mark = "'", scale = 1/1e6, suffix = "m", accuracy = 0.1), n.breaks = 10) +
+      scale_y_continuous(name = str_c("as at ", date_full_cq), labels = number_format(big.mark = "'", scale = 1/1e6, suffix = "m", accuracy = 0.1), n.breaks = 10) +
+
+      coord_fixed(ratio = 1) +
+      theme(
+        axis.text.y =  element_text(hjust = 1),
+        legend.position = "right",
+        legend.justification = c(1,1),
+        legend.key  = element_rect(fill = "white"),
+        legend.direction = "vertical",
+        panel.background = element_rect(fill = NA, color = NA),
+        panel.grid.major = element_line(colour = "lightgrey", linetype = "dashed")
+
+      ) +
+      labs(title = NULL) +
+      guides(
+        colour = guide_legend(title = NULL, keywidth = NULL, override.aes = list(size = xy_leg_dot_size)) , size = F, alpha = F
+        ) #nrow = 1 forces horizontal
+
+ # keywidth = unit(0, "cm")
+   ggplotly(p_mov_lr, 
+      tooltip = c("txt_tip"), 
+      dynamicTicks = T, width = 850, height = 650
+    ) %>% 
+  
+  add_annotations(
+    text = title_legend, align = "left", 
+    font = list(color = color_font),
+    xref = "paper", yref = "paper",
+    x = 1.02, xanchor = "left", 
+    y = 0.9, yanchor = "bottom",
+    legendtitle =T, showarrow = F
+    ) %>%  
+  layout(legend = list(y = 0.9, yanchor = "top", xanchor = "left"))  
+
+} )
+```
+<br> <br>
+<br> <br>
+<br> <br>
+<br> <br>
+<br> <br>
+<br> <br>
+<br> <br>
+
+
+## Loss banding
+
+```{r banding-prep, include=FALSE}
+
+df_banding_rl <- srd_add_bands2df(
+  df = df_wide, 
+  df_w_bands = df_bands, 
+  var_to_band = RL_CQ, 
+  band_negative_values = TRUE 
+  ) %>% 
+  mutate(RL_CQ = -RL_CQ)
+
+
+df_band1 <-  
+  df_banding_rl %>% ungroup() %>%   
+  select(Bands, RL_CQ) %>% 
+  group_by(Bands) %>% 
+  summarise( 
+    rl_v = sum(RL_CQ, na.rm = T),
+    rl_c = n()
+    ) %>% 
+  mutate(
+    rl_v_pct = rl_v / sum(rl_v),
+    rl_c_pct = rl_c / sum(rl_c)
+  ) %>% 
+   mutate(
+     hl_ref_v = if_else(rl_v_pct == max(rl_v_pct), 1, 0),
+     hl_ref_c = if_else(rl_c_pct == max(rl_c_pct), 1, 0)
+     )
+
+
+df_band2 <- df_band1 %>% 
+  mutate(
+    across(c(rl_v), 
+           number, 
+                big.mark = "'", accuracy = .1, scale = 1 / 1e6, suffix = "m"
+           
+           )) %>% 
+      
+      mutate( rl_c = number(rl_c, big.mark = "'", accuracy = 1)) %>% 
+    
+mutate(
+    across(c(rl_v_pct, rl_c_pct), 
+           percent, 
+                accuracy = 1
+           )
+    ) %>% 
+  relocate(rl_v_pct, .before = rl_c) 
+  
+df_band2
+
+
+```
+
+The table below shows the loss banding both by dollar amounts and claims count
+```{r chunk-kbl-band, message = F, warning = F }
+
+
+
+banded_row_band <- seq(1, nrow(df_band2), 2)
+
+kbl_band <- 
+  df_band2  %>% 
+    mutate(
+      rl_v_pct = if_else(hl_ref_v == 1, 
+      cell_spec(rl_v_pct, background = "yellow"), 
+      rl_v_pct),
+      
+      rl_c_pct = if_else(hl_ref_c == 1, 
+      cell_spec(rl_c_pct, background = "yellow"),
+      rl_c_pct)
+      ) %>% 
+    select(-hl_ref_v, -hl_ref_c)  %>% 
+    
+      knitr::kable(format = "html", escape = F,
+              align = "lcccc",
+              col.names = c("Bands",
+                             "Amount",
+                             "Percentage",
+                             "Count",
+                            "Percentage"
+                             ), 
+              caption = "Banding Reported Losses"
+
+ 
+             ) %>% 
+  kable_styling(
+    bootstrap_options = c("condensed"), 
+    full_width = F, 
+    position = "l" #, font_size = 14
+    # stripe_color not available in html!!!
+    )    %>% 
+
+  row_spec(0, color = color_hd, extra_css = str_c("font-weight: normal; vertical-align: top;", "border-bottom: 1px solid",  color_font, ";")) %>% 
+  row_spec(1:nrow(df_band2), color = color_font, extra_css = "border-bottom: hidden;") %>% 
+  row_spec(banded_row_band, background = color_bg) %>% 
+  row_spec(0, extra_css = "vertical-align: top;") %>% 
+  column_spec(column = 1, width = "10em") %>% 
+  column_spec(column = 2:5, width = "6em") %>% 
+  row_spec(row = nrow(df_band2) , extra_css = "border-bottom: 1px solid #2E2B21;" ) %>% 
+  add_header_above( c(" " = 1, "By Reported" = 2, "By Count " = 2), line = F, extra_css = "font-weight: normal;")  
+  # add_footnote(str_wrap("'Technical Result' is the sum of 'Net Premium' with 'Ultimate Loss'", width = 38), notation = "none") 
+
+# show me
+kbl_band
+
+
+# add comment to the table
+
+max_rl_v <-df_band1 %>% arrange(desc(rl_v)) %>% .$Bands %>% .[1]
+max_rl_c <-df_band1 %>% arrange(desc(rl_c)) %>% .$Bands %>% .[1]
+
+
+nothing_rep_all_pct<- 
+df_band2 %>% 
+  select(rl_c_pct) %>% 
+  pull() %>% .[1]
+
+txt_max_rl_v <- as.character(max_rl_v)
+
+txt_max_rl_pct <- df_band1 %>% 
+  filter(Bands == max_rl_v) %>% 
+  select(rl_v_pct) %>% 
+  pull() %>% 
+  scales::percent(x = ., accuracy = 1)
+
+
+
+```
+
+<div class = "vlowrh">
+
+> **`r fn_text(nothing_rep_all_pct, color_blue, 46)`**\
+> `r fn_text("of the policies within the book", "slategrey")`\
+> `r fn_text("did not generate any reported losses", color_blue)`\
+> `r fn_text("as of ", "slategrey")` `r fn_text(date_full_cq, "slategrey")`
+
+</div>
+
+The following charts slice the loss banding by underwriting year and region respectively.
+
+**By Underwriting Year**
+
+The position of each dot is randomly distributed for each band i.e.: it does **not represent** the relative position of the loss amounts.
+
+```{r p-banding-rl-uwy, fig.dim=c(9, 6.5), message=F, warning=F, fig.cap="Reported Loss banding by Underwriting Year"}
+p_banding_rl_uwy <- 
+srp_banding(
+    # required
+    df = df_banding_rl, 
+    x = UWY, 
+    y_bands = Bands,
+    
+    # # data labels
+    # dlab_cell_pct_x = TRUE,
+    # 
+    # # so dots only occupy 75% vertically  
+    spec_shuffle_v = 0.7,
+    size_dot = c(0.8,1.1, 1.5),
+    fade_dot = c(0.5, 0),
+    dlab_cell_pct_x = TRUE,
+    seed_value = 12
+    )
+
+
+# show me
+p_banding_rl_uwy
+
+```
+
+**By Region**
+
+The position of each dot **represents** the relative value of the policy's reported losses within the band. The values at the top of the chart are the total for each region in both in terms of dollar amount (top value) and count (bottom value).
+
+```{r p-band-rl-land, fig.dim=c(9, 6.5), message = F, warning = F, fig.cap= "Reported Loss banding by Region"}
+p_banding_rl_land <- 
+
+srp_banding(
+    # required
+    df = df_banding_rl,
+    x = Land, 
+    y_bands = Bands,
+    
+    # to get the proper relative
+    # pos in the band
+    y_values = RL_CQ,
+    LB_values = LB,
+    UB_values = UB,
+    
+    # adding data labels
+    dlab_cell_pct_x = TRUE,
+    dlab_tot_x = TRUE,
+    # dlab_tot_y = TRUE,
+    
+    # set dot size and transparency
+    size_dot = c(0.8, 1.5),
+    fade_dot = c(0.5, .35, 0),
+    size_dlab_tot_x = 2.6,
+    
+    # format number
+    fmt_num_units_val = "m",
+    fmt_num_decimals_y_values = 1,
+    
+    # set position of the label
+    pos_dlab_cell_pct_x_vh = "br",
+    spec_shuffle_h = 0.7
+    )
+
+
+# show me
+p_banding_rl_land
+```
+
+
+```{r txt_banding, include=FALSE}
+df_comment_band <- 
+  bind_cols(
+    df_banding_rl %>%
+        filter(Bands == "Nothing\nReported") %>% 
+        select(Land, RL_CQ) %>% 
+        group_by(Land) %>% 
+        summarise(rl_0 = n()),
+        
+    df_banding_rl %>%
+        select(Land, RL_CQ) %>% 
+        group_by(Land) %>% 
+        summarise(rl_all = n()) %>% 
+        select(rl_all)
+        ) %>% 
+    srd_add_total_row(var_w_total = Land, var_w_total_as_fct = TRUE) %>% 
+    mutate(p = 1 -  rl_0 / rl_all,
+    txt_p = scales::percent(p, accuracy = 1)) %>% 
+    arrange(desc(p)) %>% 
+    slice(1, nrow(.))
+
+
+# text for commenting
+txt_most_losses_land <- df_comment_band %>% pull(Land) %>% as.character() %>% .[1]
+txt_most_losses_pct <- df_comment_band %>% pull(txt_p) %>% as.character() %>% .[1]
+
+txt_least_losses_land <- df_comment_band %>% pull(Land) %>% as.character() %>% .[2]
+txt_least_losses_pct <- df_comment_band %>% pull(txt_p) %>% as.character() %>% .[2]
+
+txt_most_losses_land
+txt_most_losses_pct
+txt_least_losses_land
+txt_least_losses_pct
+
+
+# greatest differential between count and amount
+df_greatest_diff <- 
+  df_banding_rl %>%
+      select(Land, RL_CQ) %>% 
+      group_by(Land) %>% 
+      summarise(rl_c = n(),
+      rl_v = sum(RL_CQ, na.rm = TRUE)
+      ) %>% 
+      mutate(rl_c_p = rl_c / sum(rl_c),
+             rl_v_p = rl_v / sum(rl_v),
+             diff = rl_v_p - rl_c_p
+             ) %>% 
+    filter(diff == max(diff))
+
+
+
+txt_ge_diff_land <- df_greatest_diff %>% pull(Land) %>% as.character()
+txt_ge_diff_v <- df_greatest_diff %>% pull(rl_v_p) %>% scales::percent(x = ., accuracy = 1)
+txt_ge_diff_c <- df_greatest_diff %>% pull(rl_c_p) %>% scales::percent(x = ., accuracy = 1)
+
+```
+As of `r date_full_cq`, `r txt_most_losses_land` had `r fn_text(txt_most_losses_pct, color_blue)` of its policies generating claims, the highest proportion of all regions. At the opposite end is `r txt_least_losses_land` with only `r fn_text(txt_least_losses_pct, color_blue)` of it policies having produced losses. Note, that these figures exclude IBNR which may be material, especially for the most recent underwriting years.
+
+In addition, `r txt_ge_diff_land` makes up `r fn_text(txt_ge_diff_c, color_blue)` of the total number of policies within the book of business but contributes with `r fn_text(txt_ge_diff_v, color_blue)` to the total reported loss amount, the greatest differential of all regions. For the remaining regions see the header on Figure \@ref(fig:p-band-rl-land).
+
+<br>
+
+## Ultimate Loss split by Paid, Case and IBNR
+
+The ultimate loss is composed by three type of amounts (ordered by level of certitude):
+
+$$Ultimate\;Loss = Paid\;Losses + Case\;Reserves + IBNR$$
+According to the internal model:^[Please refer to Remarkable's internal model documentation]
+
+$$ \Delta Reserves\sim \mathcal{N(\mu=0,\,\sigma_i^{2})},\;i=`r oldest_uwy` ,...,`r current_uwy`$$
+$$ where,\;Reserves = Case\;Reserves + IBNR$$
+
+
+```{r chunk_p_decom_ul, include=F}
+df_decom_ul_col <- df_long %>%
+  rename(toa = type_of_amount) %>% 
+  group_by(UWY, toa) %>% 
+  summarise(amount = sum(amount, na.rm = T)) %>% 
+  filter( toa == "PL_CQ" | toa == "CR_CQ" | toa == "IBNR_CQ" ) %>% 
+  mutate(
+    amount = -amount,
+    toa = factor(toa, c("PL_CQ", "CR_CQ", "IBNR_CQ"))) 
+
+df_decom_ul <- df_long %>%
+  rename(toa = type_of_amount) %>% 
+  group_by(UWY, toa) %>% 
+  summarise(amount = sum(amount, na.rm = T)) %>% 
+  filter( toa == "UL_CQ" ) %>% 
+  mutate(
+    amount = -amount,
+    amount_txt = number(amount, big.mark = "'", scale = 1/1e6, accuracy = 0.1))
+
+
+
+my_breaks_ul <- pretty(df_decom_ul_col$amount, n = 5)
+
+pretty_unit_decom <- my_breaks_ul[2] - my_breaks_ul[1]
+
+my_nudge <- pretty_unit_decom * 0
+
+df_up_uwy <- 
+  df_wide %>% 
+  group_by(UWY) %>% 
+  select(UP_CQ) %>% 
+  summarise(amount = sum(UP_CQ, na.rm =T )) 
+
+
+p_decom_ul <- 
+
+
+ggplot(data = df_decom_ul_col, aes(x = UWY, y = amount)) +
+  geom_col(aes(fill = fct_rev(toa))) +
+  
+  geom_point(
+    data = df_up_uwy, 
+    size = 4, 
+    alpha = 1,
+    aes(color = "hotpink")
+    ) +
+
+  geom_line(group = 1,
+    data = df_up_uwy, 
+    size = 1, linetype = 2, 
+    alpha = 1,
+    aes(color = "hotpink")
+    ) +
+
+  
+  
+  scale_color_manual(
+    values = color_beige, 
+    label = "Premium") +
+
+  geom_text(
+    data = df_decom_ul, 
+    aes(label = amount_txt), 
+    vjust = -0.5)  +
+
+  scale_fill_manual(values = c("#cce4d6", "#7fbc99", "#007934"), labels = c("IBNR", "Case", "Paid")) +
+  
+  scale_y_continuous(name = NULL, n.breaks = 8, labels = scales::number_format(accuracy = 0.1, scale = 1/1e6, suffix = "m")) +
+  
+  scale_x_discrete(name = "Underwriting Year") +
+  
+  guides(
+    fill = 
+      guide_legend(title = NULL, reverse = T), 
+    color = guide_legend(title = NULL, override.aes = list(linetype = 0))) +
+  
+  theme(
+        axis.text.y =  element_text(hjust = 0), 
+        # plot.margin = unit(c(0, 0, 0, 0), "lines"), 
+        legend.position = "top", 
+        legend.key  = element_rect(fill = "white"), 
+        legend.direction = "horizontal",
+        axis.ticks.x = element_blank(),
+        panel.background = element_rect(fill = NA, color = NA),
+        panel.grid.major.y =  element_line(linetype = "dashed", colour = "darkgrey"), axis.ticks.length.y = unit(0, units = "cm")
+      )
+  
+
+p_decom_ul
+
+df_decom_ul_col_wrp <- df_long %>%
+  rename(toa = type_of_amount) %>% 
+  group_by(UWY, Land, toa) %>% 
+  summarise(amount = sum(amount, na.rm = T)) %>% 
+  filter( toa == "PL_CQ" | toa == "CR_CQ" | toa == "IBNR_CQ" ) %>% 
+  mutate(
+    amount = -amount,
+    toa = factor(toa, c("PL_CQ", "CR_CQ", "IBNR_CQ"))) 
+
+df_decom_ul_wrp <- df_long %>%
+  rename(toa = type_of_amount) %>% 
+  group_by(UWY, Land, toa) %>% 
+  summarise(amount = sum(amount, na.rm = T)) %>% 
+  filter( toa == "UL_CQ" ) %>% 
+  mutate(
+    amount = -amount,
+    amount_txt = number(amount, big.mark = "'", scale = 1/1e6, accuracy = 0.1))
+
+df_up_wrp <- df_long %>%
+  rename(toa = type_of_amount) %>% 
+  group_by(UWY, Land, toa) %>% 
+  summarise(amount = sum(amount, na.rm = T)) %>% 
+  filter(toa == "UP_CQ")
+
+
+my_breaks <- pretty(df_decom_ul_col_wrp$amount, n = 5)
+
+pretty_unit_decom <- my_breaks[2] - my_breaks[1]
+
+add_lim <- c(min(my_breaks), max(my_breaks) + 0*pretty_unit_decom)
+
+p_decom_ul_wrp <-
+  ggplot(data = df_decom_ul_wrp, aes(x = UWY, y = amount)) +
+      geom_col(data = df_decom_ul_col_wrp, aes(x = UWY, y = amount, fill = fct_rev(toa))) +
+      
+      geom_point(data = df_up_wrp, aes(color = "hotpink"), size = 3) +
+    
+      geom_line(data = df_up_wrp, 
+                aes(color = "hotpink" ), 
+                size = 0.8, group = 1,
+                linetype = 2) +
+
+      scale_color_manual( labels = "Premium", values =  color_beige) +
+      scale_fill_manual(values = c("#cce4d6", "#7fbc99", "#007934"), 
+                        labels = c("IBNR", "Case Reserves", "Paid Losses")) +
+      scale_y_continuous(
+        name = NULL, 
+        n.breaks = 8,
+        labels = number_format(big.mark = "'", scale = 1 / 1e6, accuracy = 0.1, suffix = "m")
+        ) +
+      scale_x_discrete(name = "Underwring Year") +
+        
+    theme(
+        axis.text.y =  element_text(hjust = 0), 
+        
+        legend.position = "top", 
+        legend.key  = element_rect(fill = "white"), 
+        legend.direction = "horizontal",
+        
+        panel.background = element_rect(fill = NA, color = NA),
+        panel.grid.major.y =  element_line(linetype = "dashed", colour = "darkgrey"), axis.ticks.length.y = unit(0, units = "cm")
+        
+      ) +
+    scale_alpha(guide = "none") +
+      guides(
+        fill = guide_legend(title = NULL, reverse = T), 
+        color = guide_legend(title = NULL, override.aes = list(linetype = 0))) +
+  
+  facet_wrap(facets = ~ Land, ncol = 3)
+
+
+
+```
+
+
+```{r p-decom-ul, message=F, fig.dim= c(12, 8), include=T, fig.cap='Ultimate Loss as the sum of Paid, Case and IBNR'}
+p_decom_ul
+```
+
+<details><summary>Sliced by Region</summary>
+
+Figure \@ref(fig:p-decom-ul-wrp) show the Ultimate Loss and Premium evolution since `r oldest_uwy` for each of the regions.\
+The Ultimate Loss is composed by the sum of Paid Losses, Case Reserves and IBNR.
+
+```{r p-decom-ul-wrap, message=F, fig.dim=c(10, 8), include=T, fig.cap='Ultimate Loss as the sum of Paid, Case and IBNR'}
+p_decom_ul_wrp
+```
+</details>
+
+```{r chunk_wrd_cloud, include = F}
+# create a simple unigram word cloud
+# remove common words
+stop_wrds <- c(stopwords("en"), "damage", "engine", "vessel", "main", "losses",
+               "dmg", "damaged", "damages", "damag", "provided",
+               "eur", "usd", "please", "various", "bdx", "bordereau", "detail", "incident",
+               "iro", "ded", "loss", "dol", "tba", "whilst", "claim", "accid",
+               "due", "problem", "problems", "alleged", "allegedly", "zzzz", "zzz", "liabilities", "liability")
+
+# a function to clean the text
+fn_clean_corpus <- function(x) {
+  x <- tm_map(x, content_transformer(tolower) )
+  x <- tm_map(x, stripWhitespace)
+  x <- tm_map(x, removePunctuation)
+  x <- tm_map(x, removeNumbers)
+  
+  # x_copy <- unlist(str_split(x, " "))
+  # x <- tm_map(x, stemDocument)
+  # x <- tm_map(x, (stemCompletion), dictionary = my_dic, lazy = T, type = "prevalent")
+  x <- tm_map(x, removeWords, words = c(stop_wrds, ""))
+  return(x) 
+}
+
+
+
+df_wc1 <- df_wide %>% filter(!is.na(CLAIM_DESC)) %>% 
+  select(CLAIM_ID, CLAIM_DESC) %>% 
+  # make sure wwe do not repeat the same claim more than once
+  distinct(CLAIM_ID, .keep_all = T) 
+
+# remove extra characters
+df_wc2 <- df_wc1 %>% 
+  rename(text = CLAIM_DESC) %>% 
+   mutate(text = str_to_lower(text),
+          text = str_replace_all(text, "[^[:graph:]]", " "),
+         text = str_replace_all(text, "[-\'\\(\\)\\[\\]0-9!?.!,]", " "),
+         text= str_replace_all(text, fixed("/"), " "),
+         text = str_replace_all(text, "[\\s]+", " "),
+         text= str_replace_all(text, fixed("dmg"), "damage"),
+         text = str_replace_all(text, pattern = fixed("fell"), replacement = "fall"),
+         text = str_trim(text)
+         ) %>% 
+  # a col doc_id is mandatory for the corpus
+  mutate(doc_id = row_number()) %>% 
+  relocate(doc_id)
+
+claim_source <- tm::DataframeSource(df_wc2)
+claim_corpus <- (VCorpus(claim_source))
+
+clean_corpus <- fn_clean_corpus(claim_corpus)
+
+tdm <- TermDocumentMatrix(clean_corpus, control = list(stemming = TRUE, weighting = weightTfIdf))  #, control = list(weighting = weightTfIdf))
+rownames(tdm) <- stemCompletion(rownames(tdm), clean_corpus) 
+
+tdm_m <- as.matrix(tdm)
+freq <- rowSums(tdm_m)
+words <- names(freq)
+
+df_wc <- data.frame(word = words, freq = freq) %>% filter(word != "") %>% 
+  arrange(desc(freq))
+
+```
+
+##  Text mining {.tabset .tabset-fade}
+
+Each of the three tabs below contains a text mining chart on Remarkable Re's claims description.
+
+### Word Cloud {-}
+
+**Word Cloud (Loss Description)**\
+The following word cloud is a visual representation of RR's loss description in which the size of each word indicates its frequency.
+
+
+```{r num_of_wc}
+
+sliderInput(
+  inputId = "num_words", 
+  label = "Select number of words to display", 
+  min = 1, max = 150, value = 50
+  )
+
+```
+
+
+```{r p-wrd-cloud, out.width="100%", , fig.cap='Word cloud of claim\'s description'}
+# num_of_words_wc <- 50
+set.seed(1234)
+cr_colors <- brewer.pal(n = 8, "Dark2")
+
+renderWordcloud2({
+df_wc <-
+  df_wc %>%
+  head(input$num_words)
+  # plot it
+  wordcloud2(data = df_wc, size = 0.5  )
+})
+
+
+```
+
+<br>
+
+### Top 10 most frequent words {-}
+
+**Top 10 most frequent words**\
+
+The following tabs display the top 10 most frequent words present in the data base^[Besides the standard *stop words* it also excludes insurance specific terms such as 'claims', 'liability', 'loss' to name a few] 
+
+```{r p-top-10-words, fig.dim=c(12, 8), message=F, warning=F, fig.cap='Top 10 most frequent words in claims'}
+df_freq <- freq[names(freq) != ""] %>% sort() %>% tail(10) %>% bind_rows()  %>% 
+  pivot_longer(
+    cols = everything(), 
+    names_to = "type", 
+    values_to = "frequency"
+    )  %>% 
+  filter(str_detect(type, "^\\.\\.\\.", negate = T)) %>% 
+
+  arrange(desc(frequency)) %>% 
+  mutate(type = fct_rev( fct_inorder(type)) )
+
+fn_rgb2hex <- function(r,g,b) rgb(r, g, b, maxColorValue = 255)
+
+colors_top_10 <- c(fn_rgb2hex(224, 0, 52), 
+                   fn_rgb2hex(227, 26, 73), 
+                   fn_rgb2hex(230, 51, 93), 
+                   fn_rgb2hex(118, 16, 146), 
+                   fn_rgb2hex(132, 40, 157), 
+                   fn_rgb2hex(145, 64, 168), 
+                   fn_rgb2hex(0, 169, 224), 
+                   fn_rgb2hex(26, 178, 227), 
+                   fn_rgb2hex(51, 186, 230), 
+                   fn_rgb2hex(77, 195, 233))
+
+
+max_freq <- df_freq$frequency %>% max()
+p_breaks <-  pretty(c(0, max_freq), n = 10)
+
+
+p_top10_wrds <- ggplot(df_freq, aes(x = (type), y = frequency)) + 
+  geom_linerange(aes(x = type, ymin = 0, ymax = frequency), color = "lightgrey", size = 1.5) +
+  geom_point(size = 4, color = colors_top_10) +  
+  # geom_point(aes(color = type), size = 5) + 
+  # ggpubr::color_palette("jco") + 
+  
+  # labs(title = "Top 10 claims words") +
+  geom_hline(yintercept = p_breaks, color = "darkgrey", linetype = "dotted") +
+  
+  scale_y_continuous(name = NULL, expand = expansion(add = c(0, 10) )) + 
+  scale_x_discrete(name = NULL, expand = expansion(add = c(0.2, 0.1))) + coord_flip() +
+  
+  theme(  
+    axis.title = element_text(size = 10),
+    panel.background = element_rect(fill = NA, color = NA), text = element_text(size = 15)
+    
+  )
+
+
+# show me
+
+p_top10_wrds
+
+```
+
+<br>
+
+```{r assoc_term, include=F}
+top5_most_freq_claim <- df_freq %>% top_n(n = 5, wt = frequency) %>% .$type
+assoc_term_txt <- as.character(top5_most_freq_claim[3])
+
+```
+
+### Words most associated with `r assoc_term_txt` {-}
+
+**Words most associated with the word `r assoc_term_txt`**\
+
+Below we display the words most associated with the word `r assoc_term_txt`
+
+```{r p-wrd-corr, fig.dim=c(10, 6), message = F, warning=F, fig.cap='Word correlation plot'}
+top5_most_freq_claim <- df_freq %>% top_n(n = 5, wt = frequency) %>% .$type
+assoc_term_txt <- as.character(top5_most_freq_claim[3])
+
+corlim <- 0.2
+
+ls_assoc <- findAssocs(tdm, terms = assoc_term_txt, corlimit = corlim)
+ls_assoc <- ls_assoc[!duplicated(ls_assoc)]
+# create a tibble from the list
+
+df_assoc <- tibble(
+                word = names(ls_assoc[[1]]),
+                score = ls_assoc[[1]],
+                X1 = assoc_term_txt
+            ) %>% 
+
+  relocate(X1) %>% 
+  arrange((score)) %>% 
+  mutate(word = fct_inorder(word))
+
+
+p_wrd_cor <- ggplot(df_assoc, aes(score, word, color = word)) +
+    geom_point(size = 4, color = color_TR_neg) +
+  # scale_color_brewer(palette = "Dark2") +
+    scale_x_continuous(name = "correlation", n.breaks = 10) +
+    scale_y_discrete(name = NULL) +
+    # labs(title = str_c("Words most associated with: ", assoc_term_txt)) +
+    theme(
+        legend.position = "none",
+          axis.text.y =  element_text(hjust = 0), 
+          # panel.border = element_rect(colour = "red", fill = NA),
+          # panel.spacing.y = unit(5, "lines"),
+          # plot.margin = unit(c(0, 0, 0, 0), "lines"), 
+          panel.background = element_rect(fill = NA, color = NA),
+          axis.text = element_text(size = 10),
+          axis.title.x = element_text(size = 10),
+          panel.grid.major.y =  element_line(linetype = "dashed", colour = "darkgrey"), axis.ticks.length.y = unit(0, units = "cm")
+          
+        ) 
+
+# show me
+p_wrd_cor
+
+```
+
+
+# Appendix {-}
+
+## Appendix A - Priced vs Reserved Loss Ratios by Industry {-#App_A}
+
+```{r industry, include=FALSE}
+
+df_Industry1 <- df_wide %>% ungroup() %>%
+  select(
+      Industry,
+      UP_CQ, UL_CQ, RL_CQ,
+      UL_T0, UP_T0) %>%
+  group_by(Industry) %>%
+  summarise(UL_CQ = sum(UL_CQ, na.rm = T),
+            UP_CQ = sum(UP_CQ, na.rm = T),
+            UL_T0 = sum(UL_T0, na.rm = T),
+            UP_T0 = sum(UP_T0, na.rm = T)
+            )
+
+df_Industry2 <- df_Industry1 %>%
+  mutate(
+    ULR_CQ = -UL_CQ / UP_CQ,
+    ULR_T0 = -UL_T0 / UP_T0,
+    txt_up = scales::number(x = UP_CQ, accuracy = 0.1, scale = 1/1e6, suffix = "m"),
+    ind_up = glue::glue("{Industry} ({txt_up})"),
+    diff = (ULR_CQ - ULR_T0),
+    fade = if_else(diff > 0.15 & UP_CQ > 1e6 , 0, 0.7)
+    )  %>% 
+  arrange((UP_CQ)) %>% 
+  mutate(ind_up = fct_inorder(ind_up))
+
+df_Industry2  %>% arrange(desc(UP_CQ))
+
+
+p_t0_vs_ulr_ind <- srp_cleveland(
+    df = df_Industry2,
+    x = ind_up,
+    y1 = ULR_T0, y2 = ULR_CQ,
+    
+    lab_legend_y1_y2 = c("Priced", "Reserved"),
+    fmt_num_units_y = "%",
+    spec_theme_flip = TRUE,
+    pos_legend = "tr",
+    fade_dots = fade,
+    pos_y_axis_to_right = TRUE
+    )
+  
+txt_num_ind <- nrow(df_Industry2)  
+txt_num_ind_over1m <- nrow(filter(df_Industry2, UP_CQ >= 1e6))
+txt_num_ind_over1m_15pct <- nrow(filter(df_Industry2, fade == 0))
+
+df_fade0 <- filter(df_Industry2, fade == 0) %>%   arrange(desc(diff))
+
+txt_ind_greatest_diff <- df_fade0 %>% pull(Industry) %>% .[1] %>% as.character()
+txt_val_greatest_diff <- df_fade0 %>% pull(diff) %>% .[1] %>% 
+  scales::percent(accuracy = 1)
+
+
+txt_greatest_diff <- if (txt_num_ind_over1m_15pct == 0) {
+  "No industry was priced below the actual reserved amounts."
+  } else {
+
+glue::glue("
+displays the greatest difference with an Ultimate Loss deficiency of {txt_val_greatest_diff}.
+           ")
+  }
+
+txt_ind_greatest_diff
+
+```
+
+Out of `r txt_num_ind` industries, `r txt_num_ind_over1m` generated a premium over USD 1m. Of these `r txt_num_ind_over1m`, there are  `r txt_num_ind_over1m_15pct` that exhibit an Ultimate Loss that is 15% greater than initially priced. 
+`r fn_text(txt_ind_greatest_diff, color_red)` `r txt_greatest_diff`
+
+
+```{r pIndustry, fig.dim=c(9, 6.5), fig.cap="Priced vs Reserved by Industry"}
+p_t0_vs_ulr_ind
+```
+
+
+## Appendix B - Data set{-}
+The following table shows key figures for each policy holder for and it is included for completeness.
+All values in USD as of `r  date_full_cq`. 
+
+```{r data_cedent, echo=F, message=F}
+
+
+df_DT <- df_wide %>% 
+  group_by(Insured, LE, Land, Industry) %>% 
+  summarise(across(where(is.numeric), ~ sum(., na.rm = F))) %>% 
+  mutate(
+    Insured = as.factor(Insured),
+    RLd_CQ =  ( RL_CQ - RL_LQ ),
+    IBNRd_CQ =  ( IBNR_CQ - IBNR_LQ ),
+    UPd_CQ =  ( UP_CQ - UP_LQ ),
+    TRd_CQ = TR_CQ - TR_LQ,
+    
+    UL_rt_CQ = if_else(UP_CQ < 0.1, 0, -UL_CQ / UP_CQ),
+    UAC_rt_CQ = if_else(UP_CQ < 0.1, 0, -UAC_CQ / UP_CQ),
+    Comb_rt_CQ = UL_rt_CQ + UAC_rt_CQ,
+    IBNR_rt_CQ = if_else(UP_CQ < 0.1, 0, IBNR_CQ / UP_CQ),
+    RL_rt_CQ = if_else(UP_CQ < 0.1, 0,-RL_CQ / UP_CQ)
+    
+    ) %>% 
+  select(Insured, LE, Land, UP_CQ, UAC_CQ, PL_CQ, CR_CQ, IBNR_CQ, UL_CQ, TR_CQ, UL_rt_CQ, Comb_rt_CQ ) %>% 
+  rename(
+    "Written Premium" = UP_CQ, 
+         Costs = UAC_CQ, "Paid Losses" = PL_CQ, "Case Reserves" = CR_CQ, 
+         "IBNR" = IBNR_CQ,"Ult. Loss" = UL_CQ, "Tech. Result" = TR_CQ,
+         "Ult. loss ratio" = UL_rt_CQ, "Combined ratio" = Comb_rt_CQ)
+
+
+v_numbers <- df_DT %>% ungroup() %>%  select(where(is.numeric)) %>% colnames()
+
+v_ratios <- str_subset(v_numbers, pattern = fixed("ratio"))
+
+v_amounts <- str_subset(v_numbers, pattern = fixed("ratio"), negate = T)
+
+
+v_colnames <- df_DT %>% colnames()
+
+
+
+DT::datatable(filter = "top",
+  options = list(
+     autoWidth = TRUE,
+    initComplete = JS(
+      # fontFamily = "Ink widthFree",
+    "function(settings, json) {",
+    
+    
+    "$(this.api().table().header()).css({
+    'font-family': 'SwissReSans', 'color': '#282828', 'font-size': '80%'});
+    
+    $(this.api().table().body()).css({
+    'font-family': 'SwissReSans', 'color': '#282828', 'font-size': '80%'});
+    
+    
+    ",
+    "}")
+    ),
+      rownames = FALSE,
+  
+      data = df_DT %>% 
+              mutate(across(v_amounts, ~ round(.)   )) %>% 
+              mutate(across(v_ratios, ~ round(., 2)   ))  
+
+  
+  
+  )  
+  
+   # DT::formatPercentage(
+   #       
+   #   digits = 1, columns = v_ratios
+   #     ) %>%    
+   # DT::formatRound(digits = 1L, columns = v_amounts, mark = "'")  
+  # formatStyle(columns = v_colnames, color = color_font) 
+  
+
+
+    # initComplete = JS(
+    #   # fontFamily = "Ink Free",
+    # "function(settings, json) {",
+    # "$(this.api().table().header()).css({
+    # 'background-color': '#eff2f1', 'color': '#282828'});",
+    # "}")
+
+```
+
+
