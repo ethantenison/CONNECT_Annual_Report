@@ -229,22 +229,24 @@ inner_circle <- centers |>
 
 layout[] <- dplyr::bind_rows(outer_circle, inner_circle)
 
+#Manually changing some of the points so that you can see the names 
 layout$x[layout$name == "Any Baby Can"] <- 0.580674651        	
 layout$y[layout$name == "Any Baby Can"] <- 0.814135711
 layout$x[layout$name == "Foundation Communities, Supportive Housing"] <- 0.093734484        	
 layout$y[layout$name == "Foundation Communities, Supportive Housing"] <- 0.99559723
 
 
-layout$x[layout$name == "Literacy Coalition"] <- 0.474498359        	
-layout$y[layout$name == "Literacy Coalition"] <- -0.88025639
-layout$x[layout$name == "Hays Caldwell Women's Center"] <- 0.241652008        	
-layout$y[layout$name == "Hays Caldwell Women's Center"] <- -0.97036298
+layout$x[layout$name == "Skillpoint"] <- -0.229488038        	
+layout$y[layout$name == "Skillpoint"] <- 0.97331148
+layout$x[layout$name == "ECHO"] <- -0.056293600        	
+layout$y[layout$name == "ECHO"] <- 0.99841426
 
-layout$x[layout$name == "PelotonU"] <- 0.265864481        	
-layout$y[layout$name == "PelotonU"] <- -0.96401041
-layout$x[layout$name == "LifeWorks"] <- -0.056293600        	
-layout$y[layout$name == "LifeWorks"] <- -0.99841426
 
+layout$x[layout$name == "PelotonU"] <- 0.539204205        	
+layout$y[layout$name == "PelotonU"] <- -0.84217506
+layout$x[layout$name == "GeoFORCE Texas"] <- -0.056293600        	
+layout$y[layout$name == "GeoFORCE Texas"] <- -0.99841426
+ 
 
 layout$x[layout$name == "Latinitas"] <- -0.349197639        	
 layout$y[layout$name == "Latinitas"] <- 0.93704910
