@@ -51,6 +51,8 @@ library(data.table)
 library(htmlwidgets)
 library(readxl)
 library(igraph)
+library(ggraph)
+library(visNetwork)
 
 knitr::opts_chunk$set(echo = FALSE, dpi = 300)
 knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
@@ -106,21 +108,17 @@ Since it's inception in 2018, CONNECT has partnered with 80 unique organizations
 
 ```{r network_viz, include = T}
 
+set.seed(23)
 
 network_raw <- read_excel("data/interim/raw_network.xlsx") |> 
   distinct()
 
 g1<-graph_from_data_frame(d=network_raw,directed=TRUE) 
 
-#Degree in 
-inDegree<-igraph::degree(g1,mode="in")
-outDegree<-igraph::degree(g1,mode="out")
-TotalDegree<-as.data.frame(igraph::degree(g1))
-betweenness<-igraph::betweenness(g1, v = V(g1), directed = TRUE, weights = NULL,
-  nobigint = TRUE, normalized = TRUE)
-inCloseness<-igraph::closeness(g1, vids = V(g1), mode = c("in"),normalized = TRUE)
-outCloseness<-igraph::closeness(g1, vids = V(g1), mode = c("out"),normalized = TRUE)
-DF_Centrality<-as.data.frame(cbind(rownames(TotalDegree),inDegree,outDegree,TotalDegree,betweenness,inCloseness,outCloseness))
+#Getting the total number of connections
+TotalDegree<- as.data.frame(igraph::degree(g1)) |> 
+   tibble::rownames_to_column("id") |> 
+   dplyr::rename("partnerships" = "igraph::degree(g1)")
 
 
 #Ploting a basic network graph with igraph dataframe 
@@ -128,6 +126,215 @@ plot(g1, edge.color = "slateblue", edge.width = E(g1)$weight, layout = layout_ni
 title("NPO Network", cex.main = 3)
 
 
+#converting network data of edges and nodes to dataframes for easier analysis 
+gvis<-toVisNetworkData(g1)
 
+edges <- gvis$edges |> 
+  left_join(TotalDegree, by = c("from" = "id"))
+
+edges <- edges[sample(nrow(edges)),]
+
+#Program Colors
+program_colors <- c("#efb346",
+                    "#17a769",
+                    "#cd023d",
+                    "#852f88",
+                    "#4e54ac")
+
+names(program_colors) <- c(
+  "CONNECT",
+  "Mission Squared",
+  "Austin Together Fund",
+  "Mission Capital",
+  "Good Measure"
+)
+
+
+
+#Creating a column to indicate which edge should be opaque   
+main <- edges |> 
+  distinct(from, .keep_all = TRUE) |> 
+  select(from, to) |> 
+  mutate(main = TRUE)
+
+edges <- edges |> 
+  left_join(main, by = c("from", "to")) |>
+  mutate(main = tidyr::replace_na(main, FALSE))
+
+nodes <- edges |> 
+  filter(main == TRUE) |> 
+  select(from, to, partnerships) |> 
+  dplyr::rename("node" = "from", "program" = "to") |> 
+  rbind(c("CONNECT", "CONNECT", 80),
+        c("Good Measure", "Good Measure", 107))
+
+nodes$partnerships <- as.numeric(nodes$partnerships)
+
+#separating nodes for inner and outer layout
+nodes_outer <- nodes |> 
+  filter(partnerships < 7) |> 
+  mutate(level = 1)
+
+# number of nonprofits to display in outer ring
+number_of_nonprofits <- 251
+
+nodes_inner<- nodes |> 
+  filter(partnerships > 6) |> 
+  mutate(program = ifelse(node == "Austin Together Fund", "Austin Together Fund", program),
+         program = ifelse(node == "Mission Squared", "Mission Squared", program),
+         level = 2) 
+
+vertices <- bind_rows(nodes_outer, nodes_inner) |> 
+  mutate(#radius = partnerships + 2,
+         program = factor(program, names(program_colors)))
+
+vertices$radius <- as.numeric(vertices$partnerships) ** 1.8/2
+
+top_programs <- as.character(unique(vertices$program))
+
+graph <- graph_from_data_frame(edges, vertices = vertices)
+
+
+
+```
+
+## Formatting the Network Visualization 
+
+```{r network_formatting}
+windowsFonts(Georgia = windowsFont("Georgia"))
+
+# create custom layout by updating existing circle layout
+layout <- create_layout(graph, layout = 'circle')
+
+
+outer_circle <- layout |>
+  dplyr::filter(level == 1) |>
+  dplyr::mutate(program = factor(program, names(program_colors))) |>
+  dplyr::arrange(program, desc(name)) |>
+  dplyr::mutate(
+    x = cos((row_number() - 1) / number_of_nonprofits * 2 * pi),
+    y = sin((row_number() - 1) / number_of_nonprofits * 2 * pi)
+  )
+
+
+# positioning circle centers manually by specifying polar coords
+angles <- c(170, 95, 130, 40, 295)
+radii <- c(0.5, 0.65, 0.8, 0.6, 0.5)
+centers <- tibble(x = radii * cos(angles / 180 * pi),
+                  y = radii * sin(angles / 180 * pi))
+inner_circle <- centers |>
+  bind_cols(select(filter(layout, level == 2),-x,-y)) |>
+  mutate(program = ifelse(name == "Mission Squared", "Mission Squared", program)) |>
+  mutate(program = ifelse(name == "Mission Capital", "Mission Capital", program))
+
+layout[] <- dplyr::bind_rows(outer_circle, inner_circle)
+
+layout$x[layout$name == "Any Baby Can"] <- 0.580674651        	
+layout$y[layout$name == "Any Baby Can"] <- 0.814135711
+layout$x[layout$name == "Foundation Communities, Supportive Housing"] <- 0.093734484        	
+layout$y[layout$name == "Foundation Communities, Supportive Housing"] <- 0.99559723
+
+
+layout$x[layout$name == "Literacy Coalition"] <- 0.474498359        	
+layout$y[layout$name == "Literacy Coalition"] <- -0.88025639
+layout$x[layout$name == "Hays Caldwell Women's Center"] <- 0.241652008        	
+layout$y[layout$name == "Hays Caldwell Women's Center"] <- -0.97036298
+
+layout$x[layout$name == "PelotonU"] <- 0.265864481        	
+layout$y[layout$name == "PelotonU"] <- -0.96401041
+layout$x[layout$name == "LifeWorks"] <- -0.056293600        	
+layout$y[layout$name == "LifeWorks"] <- -0.99841426
+
+
+layout$x[layout$name == "Latinitas"] <- -0.349197639        	
+layout$y[layout$name == "Latinitas"] <- 0.93704910
+layout$x[layout$name == "Austin Child Guidance Center"] <- -0.106188016        	
+layout$y[layout$name == "Austin Child Guidance Center"] <- 0.99434607
+
+
+layout <- dplyr::arrange(layout, .ggraph.index)
+
+
+ggraph(layout) +
+  geom_edge_diagonal(
+    aes(edge_color = node1.program, edge_alpha = as.factor(main)),
+    edge_width = 0.3,
+    show.legend = FALSE
+  ) +
+  geom_node_point(aes(size = radius, color = program),
+                  alpha = 0.6,
+                  show.legend = FALSE) +
+  scale_edge_color_manual(values = program_colors) +
+  scale_color_manual(values = program_colors) +
+  scale_size_area(max_size = 150) +
+  scale_edge_alpha_manual(values = c(0.6, 1)) +
+  coord_fixed() +
+  geom_node_text(
+     aes(
+       x = 1.0175 * x,
+       y = 1.0175 * y,
+       label = ifelse(
+         partnerships > 2, 
+         name, 
+         ""),
+       angle = -((-node_angle(x, y) + 90) %% 180) + 90,
+       filter = !(name %in% top_programs)
+     ),
+     size = 4, hjust = 'outward', family = 'Georgia'
+   ) +
+  geom_node_text(
+    aes(
+      x = x,
+      y = y,
+      label = name,
+      filter = name %in% top_programs
+    ),
+    size = 6,
+    hjust = 0.5,
+    family = 'Georgia'
+  ) +
+  geom_node_text(
+    aes(
+      x = x,
+      y = y - 0.045,
+      label = ifelse(
+        partnerships > 6,
+        format(partnerships, big.mark = ','),
+        partnerships
+      ),
+      filter = name %in% top_programs
+    ),
+    size = 5,
+    hjust = 0.5,
+    family = 'Georgia'
+  ) +
+   labs(title = 'Data Capacity Building Organizations in Central Texas',
+        subtitle = 'and their Nonprofit Connections') +
+  theme_void() +
+  theme(
+    text = element_text(family = 'Georgia'),
+    legend.position = c(0.645, 0.51),
+    plot.title = element_text(
+      face = 'bold',
+      hjust = 0.5,
+      size = 20,
+      margin = margin(t = 45, b = 3)
+    ),
+    plot.subtitle = element_text(
+      face = 'plain',
+      hjust = 0.5,
+      size = 18,
+      margin = margin(t = 5, b = 3)
+    ),
+    plot.margin = margin(0, 0, 0, 0, unit = "cm")
+  )
+
+
+ggsave(
+  'reports/nonprofit_network.png',
+  width = 12,
+  height = 12.5,
+  dpi = 500
+)
 ```
 
