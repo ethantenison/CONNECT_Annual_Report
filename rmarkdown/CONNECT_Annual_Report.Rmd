@@ -108,7 +108,7 @@ Since it's inception in 2018, CONNECT has partnered with 80 unique organizations
 
 ```{r network_viz, include = T}
 
-set.seed(23)
+set.seed(32)
 
 network_raw <- read_excel("data/interim/raw_network.xlsx") |> 
   distinct()
@@ -139,14 +139,28 @@ program_colors <- c("#efb346",
                     "#17a769",
                     "#cd023d",
                     "#852f88",
-                    "#4e54ac")
+                    "#4e54ac",
+                    "#0f8096",
+                    "#e8351e"
+                    )
+
+
+# program_colors <- c("#efb346",
+#                     "#e8351e",
+#                     "#cd023d",
+#                     "#852f88",
+#                     "#4e54ac",
+#                     "#0f8096",
+#                     "#17a769")
 
 names(program_colors) <- c(
   "CONNECT",
   "Mission Squared",
   "Austin Together Fund",
   "Mission Capital",
-  "Good Measure"
+  "Good Measure",
+  "E3 Alliance",
+  "AmeriCorps"
 )
 
 
@@ -157,16 +171,24 @@ main <- edges |>
   select(from, to) |> 
   mutate(main = TRUE)
 
-edges <- edges |> 
+edges <- edges |>
   left_join(main, by = c("from", "to")) |>
-  mutate(main = tidyr::replace_na(main, FALSE))
+  mutate(main = tidyr::replace_na(main, FALSE)) |> 
+  mutate(main = case_when(
+    from == "College Forward" & to == "AmeriCorps" ~ FALSE,
+    from == "College Forward" & to == "Mission Capital" ~ TRUE,
+    from == "CIS" & to == "AmeriCorps" ~ TRUE,
+    from == "CIS" & to == "CONNECT" ~ FALSE, 
+    main ~ main
+  ))
 
+	
 nodes <- edges |> 
   filter(main == TRUE) |> 
   select(from, to, partnerships) |> 
   dplyr::rename("node" = "from", "program" = "to") |> 
   rbind(c("CONNECT", "CONNECT", 80),
-        c("Good Measure", "Good Measure", 107))
+        c("AmeriCorps", "AmeriCorps", 9)) 
 
 nodes$partnerships <- as.numeric(nodes$partnerships)
 
@@ -176,25 +198,32 @@ nodes_outer <- nodes |>
   mutate(level = 1)
 
 # number of nonprofits to display in outer ring
-number_of_nonprofits <- 251
+number_of_nonprofits <- 297
 
 nodes_inner<- nodes |> 
   filter(partnerships > 6) |> 
   mutate(program = ifelse(node == "Austin Together Fund", "Austin Together Fund", program),
          program = ifelse(node == "Mission Squared", "Mission Squared", program),
+         program = ifelse(node == "Good Measure", "Good Measure", program), 
+         program = ifelse(node == "Mission Capital", "Mission Capital", program),
+         program = ifelse(node == "E3 Alliance", "E3 Alliance", program),
+         program = ifelse(node == "AmeriCorps", "AmeriCorps", program),
          level = 2) 
 
 vertices <- bind_rows(nodes_outer, nodes_inner) |> 
   mutate(#radius = partnerships + 2,
-         program = factor(program, names(program_colors)))
+         program = factor(program, names(program_colors))) |> 
+  dplyr::distinct()
 
-vertices$radius <- as.numeric(vertices$partnerships) ** 1.8/2
+vertices$radius <- as.numeric(vertices$partnerships) ** 1.8/4
 
 top_programs <- as.character(unique(vertices$program))
 
 graph <- graph_from_data_frame(edges, vertices = vertices)
 
+write.csv(edges, "data/processed/organization_connections.csv")
 
+write.csv(nodes, "data/processed/organization_connections_total.csv")
 
 ```
 
@@ -202,6 +231,7 @@ graph <- graph_from_data_frame(edges, vertices = vertices)
 
 ```{r network_formatting}
 windowsFonts(Georgia = windowsFont("Georgia"))
+
 
 # create custom layout by updating existing circle layout
 layout <- create_layout(graph, layout = 'circle')
@@ -216,10 +246,9 @@ outer_circle <- layout |>
     y = sin((row_number() - 1) / number_of_nonprofits * 2 * pi)
   )
 
-
 # positioning circle centers manually by specifying polar coords
-angles <- c(170, 95, 130, 40, 295)
-radii <- c(0.5, 0.65, 0.8, 0.6, 0.5)
+angles <- c(135, 100, 245, 330, 80, 35, 360) 
+radii <- c(0.55, 0.85, 0.5, 0.65, 0.75, 0.6, 0.85)
 centers <- tibble(x = radii * cos(angles / 180 * pi),
                   y = radii * sin(angles / 180 * pi))
 inner_circle <- centers |>
@@ -230,28 +259,36 @@ inner_circle <- centers |>
 layout[] <- dplyr::bind_rows(outer_circle, inner_circle)
 
 #Manually changing some of the points so that you can see the names 
-layout$x[layout$name == "Any Baby Can"] <- 0.580674651        	
-layout$y[layout$name == "Any Baby Can"] <- 0.814135711
-layout$x[layout$name == "Foundation Communities, Supportive Housing"] <- 0.093734484        	
-layout$y[layout$name == "Foundation Communities, Supportive Housing"] <- 0.99559723
+
+ layout$x[layout$name == "Con Mi MADRE"] <- 0.8052703      	
+ layout$y[layout$name == "Con Mi MADRE"] <- -0.5929079
+ layout$x[layout$name == "Lake Travis ISD"] <- 0.9500711        	
+ layout$y[layout$name == "Lake Travis ISD"] <- -0.3120334
+ 
+ 
+ layout$x[layout$name == "Foundation Communities"] <- 0.766044443        	
+ layout$y[layout$name == "Foundation Communities"] <- -0.64278761
+ layout$x[layout$name == "Mainspring Schools"] <- 0.8936326       	
+ layout$y[layout$name == "Mainspring Schools"] <- -0.44879918
 
 
-layout$x[layout$name == "Skillpoint"] <- -0.229488038        	
-layout$y[layout$name == "Skillpoint"] <- 0.97331148
-layout$x[layout$name == "ECHO"] <- -0.056293600        	
-layout$y[layout$name == "ECHO"] <- 0.99841426
+ layout$x[layout$name == "College Forward"] <- -0.7163942        	
+ layout$y[layout$name == "College Forward"] <- 0.69769574
+ layout$x[layout$name == "Seton Healthcare Family"] <- -0.9798719        	
+ layout$y[layout$name == "Seton Healthcare Family"] <- 0.1996271
 
-
-layout$x[layout$name == "PelotonU"] <- 0.539204205        	
-layout$y[layout$name == "PelotonU"] <- -0.84217506
-layout$x[layout$name == "GeoFORCE Texas"] <- -0.056293600        	
-layout$y[layout$name == "GeoFORCE Texas"] <- -0.99841426
+  layout$x[layout$name == "Goodwill Central Texas"] <- -0.605609687        	
+ layout$y[layout$name == "Goodwill Central Texas"] <- 0.79576184
+ layout$x[layout$name == "The Austin Project"] <- -0.95331852        	
+ layout$y[layout$name == "The Austin Project"] <- 0.3019666
+ 
+   layout$x[layout$name == "YouthWorks"] <- 0.7522755        	
+ layout$y[layout$name == "YouthWorks"] <- 0.65884862
+ layout$x[layout$name == "Healthcare Workforce Alliance of Central Texas"] <- 1.00000000        	
+ layout$y[layout$name == "Healthcare Workforce Alliance of Central Texas"] <- 0.00000000
+ 
  
 
-layout$x[layout$name == "Latinitas"] <- -0.349197639        	
-layout$y[layout$name == "Latinitas"] <- 0.93704910
-layout$x[layout$name == "Austin Child Guidance Center"] <- -0.106188016        	
-layout$y[layout$name == "Austin Child Guidance Center"] <- 0.99434607
 
 
 layout <- dplyr::arrange(layout, .ggraph.index)
@@ -310,8 +347,8 @@ ggraph(layout) +
     hjust = 0.5,
     family = 'Georgia'
   ) +
-   labs(title = 'Data Capacity Building Organizations in Central Texas',
-        subtitle = 'and their Nonprofit Connections') +
+   labs(title = 'Data Capacity Building Network in Central Texas',
+        subtitle = 'By: Ethan Tenison, Project Manager for RGK Data Initiatives') +
   theme_void() +
   theme(
     text = element_text(family = 'Georgia'),
@@ -325,7 +362,7 @@ ggraph(layout) +
     plot.subtitle = element_text(
       face = 'plain',
       hjust = 0.5,
-      size = 18,
+      size = 12,
       margin = margin(t = 5, b = 3)
     ),
     plot.margin = margin(0, 0, 0, 0, unit = "cm")
@@ -333,10 +370,104 @@ ggraph(layout) +
 
 
 ggsave(
-  'reports/nonprofit_network.png',
+  'reports/nonprofit_network_v2.png',
   width = 12,
   height = 12.5,
   dpi = 500
 )
 ```
 
+# Organizational Learning Data Spring 2021 
+
+Gauging how organizations learned about different topics in data and evaluation. Some manual cleaning took place in excel.  
+
+```{r org_survey}
+
+library(RColorBrewer)
+library(extrafont)
+loadfonts(device = "win")
+
+org_learning <- read_csv("data/raw/org_learning_spring2021.csv") |>
+  select(Question, X4, X6, X8) |>
+  pivot_longer(!Question, names_to = "answer", values_to = "n") |>
+  mutate(
+    percent = n / 14,
+    answer = ifelse(answer == "X4", "Not applicable", answer),
+    answer = ifelse(answer == "X6", "Somewhat True", answer),
+    answer = ifelse(answer == "X8", "Very True", answer),
+    answer = factor(
+      answer,
+      levels =
+        c("Very True", "Somewhat True", "Not applicable"),
+      exclude = NULL,
+      ordered = TRUE
+    )
+  )
+
+
+
+
+#Quesiton
+org_learning$Question[org_learning$Question == "implement a measurement strategy for program evaluation"] <- "implement a\n measurement\n strategy"
+
+org_learning$Question[org_learning$Question == "conduct surveys, focus groups, or stakeholder interviews"] <- "conduct surveys,\n focus groups,\n or interviews"
+
+org_learning$Question[org_learning$Question == "use data for analysis, visualization, or reporting"] <- "use data\n for analysis\n or reporting"
+
+org_learning$Question[org_learning$Question == "integrate advanced analytics into the organization's operations"] <- "integrate\n advanced\n analytics"
+
+org_learning$Quesiton <- factor(
+  org_learning$Question,
+  levels =
+    c("implement a\n measurement\n strategy", "conduct surveys,\n focus groups,\n or interviews", "use data\n for analysis\n or reporting", "integrate\n advanced\n analytics"),
+  exclude = NULL,
+  ordered = TRUE
+)
+
+
+#Ggplot 
+theme_set(theme_classic())
+
+g <- ggplot(org_learning, aes(x = Question, y = percent, fill = answer)) +
+  geom_bar(stat = "identity") +
+   geom_text(aes(label = paste(format(
+     round(percent, 3)*100, nsmall = 1
+   ), "%"), y = percent),
+   position = position_stack(vjust = 0.5),
+   size = 8) +
+  coord_flip()+
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.background = element_rect(fill = "#D6D6D6"),
+    axis.line = element_blank(),
+    text = element_text(
+                        size = 30,
+                        face = "bold"),
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    axis.ticks = element_blank(),
+     axis.text.x=element_blank(),
+    plot.title = element_text(hjust = 0.5),
+    plot.margin = margin(10, 10, 10, 10),
+    plot.background = element_rect(fill = "#D6D6D6"),
+    legend.title = element_blank(),
+    legend.position = "bottom",
+    legend.background = element_rect(fill = "#D6D6D6"), 
+    
+  ) +
+  scale_fill_manual(values = c("#487897", "#7EACCD", "#F6AC75")) +
+  labs(title = "CONNECT helped\n my organization learn how to...", y = "Number Answered", fill = "Response") #+
+
+
+g
+
+ggsave(
+  "./reports/organization_learning_summer2021.png",
+  dpi = 500 ,
+  width = 14,
+  height = 9,
+  units = "in"
+)
+
+```
