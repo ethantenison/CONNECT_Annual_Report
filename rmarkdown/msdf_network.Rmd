@@ -102,11 +102,10 @@ nodes <- gvis$nodes |>
          color = program_colors) |> 
   mutate(
     size = case_when(
-      size > 8 ~ size * 2 + 20,
-      size < 15 ~ size + 15,
-      TRUE      ~ size
-      
-    )
+      size > 8 ~ size * 2 + 35,
+      size < 8 & size > 1 ~ size + 25,
+      TRUE      ~ size + 15
+        )
     )
 
 ```
@@ -139,7 +138,7 @@ visNetwork(
        visIgraphLayout(
          smooth = FALSE,
          physics = FALSE,
-         layout = "layout_nicely",
+         layout = "layout_with_kk",
          randomSeed = 27
        ) 
 ```
