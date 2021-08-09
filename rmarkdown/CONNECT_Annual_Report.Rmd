@@ -145,14 +145,6 @@ program_colors <- c("#efb346",
                     )
 
 
-# program_colors <- c("#efb346",
-#                     "#e8351e",
-#                     "#cd023d",
-#                     "#852f88",
-#                     "#4e54ac",
-#                     "#0f8096",
-#                     "#17a769")
-
 names(program_colors) <- c(
   "CONNECT",
   "Mission Squared",
@@ -162,7 +154,6 @@ names(program_colors) <- c(
   "E3 Alliance",
   "AmeriCorps"
 )
-
 
 
 #Creating a column to indicate which edge should be opaque   

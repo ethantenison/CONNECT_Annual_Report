@@ -1,0 +1,145 @@
+---
+title: "MSDF Network"
+author: "Ethan Tenison"
+output:
+  bookdown::html_document2:
+    toc: yes
+    toc_float: yes
+    toc_depth: 3
+    collapsed: no
+    number_sections: yes
+    fig_caption: yes
+always_allow_html: yes
+editor_options:
+  chunk_output_type: console
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+library(shiny)
+
+library(bookdown)
+library(officer)
+library(officedown)
+library(tidyverse)
+library(scales)
+library(extrafont)
+library(ggpubr)
+library(hablar) # Easily change column type
+library(extrafont)
+library(plotly)
+library(ggthemes)
+library(DT)
+library(htmlwidgets)
+library(data.table)
+library(htmlwidgets)
+library(readxl)
+library(igraph)
+library(ggraph)
+library(visNetwork)
+
+knitr::opts_chunk$set(echo = FALSE, dpi = 300)
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+```
+
+## Data
+
+```{r data}
+
+raw_network <- read_excel("data/interim/raw_network.xlsx") |> 
+  distinct()
+
+set.seed(32)
+
+network_raw <- read_excel("data/interim/raw_network.xlsx") |> 
+  distinct()
+
+g1<-graph_from_data_frame(d=network_raw,directed=TRUE) 
+
+#Getting the total number of connections
+TotalDegree<- as.data.frame(igraph::degree(g1)) |> 
+   tibble::rownames_to_column("id") |> 
+   dplyr::rename("partnerships" = "igraph::degree(g1)")
+
+
+#Ploting a basic network graph with igraph dataframe 
+plot(g1, edge.color = "slateblue", edge.width = E(g1)$weight, layout = layout_nicely, vertex.label = ifelse(igraph::degree(g1) > 4, V(g1)$name, NA), vertex.size = sqrt(igraph::degree(g1) * 2), vertex.label.color = "black", vertex.label.font = 2, vertex.label.degree = 1.5, vertex.label.cex = 1.3, asp = -5, vertex.color = "gold") # vertex.frame.color = "gold"
+title("NPO Network", cex.main = 3)
+
+
+#Program Colors
+program_colors <- c("#efb346",
+                    "#17a769",
+                    "#cd023d",
+                    "#852f88",
+                    "#4e54ac",
+                    "#0f8096",
+                    "#e8351e"
+                    )
+
+
+names <- c(
+  "CONNECT",
+  "Mission Squared",
+  "Austin Together Fund",
+  "Mission Capital",
+  "Good Measure",
+  "E3 Alliance",
+  "AmeriCorps"
+)
+
+colors <- data.frame(program_colors, names)
+
+#converting network data of edges and nodes to dataframes for easier analysis 
+gvis<-toVisNetworkData(g1)
+
+edges <- gvis$edges
+  
+nodes <- gvis$nodes |>
+  left_join(TotalDegree, by = "id") |> 
+  left_join(colors, by = c("id" = "names")) |> 
+  rename(size = partnerships,
+         color = program_colors) |> 
+  mutate(
+    size = case_when(
+      size > 8 ~ size * 2 + 20,
+      size < 15 ~ size + 15,
+      TRUE      ~ size
+      
+    )
+    )
+
+```
+
+
+## VISNetwork
+
+```{r visnetwork}
+
+visNetwork(
+  nodes,
+  edges,
+  main = "MSDF Network",
+  width = "100%",
+  height = "800px") |>
+       visEdges(
+         smooth = T,
+         arrows = list(
+           to = list(enabled = TRUE, scaleFactor = .5),
+           width = 3
+         ),
+         color = list(highlight = "black")
+       ) |> 
+       visNodes(color = list(
+         background = "white",
+         border = "black",
+         highlight = list(background = "#A9A9A9", border = "black"),
+          hover = list(background = "#A9A9A9", border = "black")
+       )) |>
+       visIgraphLayout(
+         smooth = FALSE,
+         physics = FALSE,
+         layout = "layout_nicely",
+         randomSeed = 27
+       ) 
+```
